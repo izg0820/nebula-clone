@@ -6,5 +6,6 @@ import { AgentsGateway } from './agents.gateway';
 @Module({
   imports: [DevicesModule],
   providers: [AgentsGateway],
+  exports: [AgentsGateway],
 })
 export class AgentsModule {}

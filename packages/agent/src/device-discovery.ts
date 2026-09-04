@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import { logger } from './logger';
-import { RegisterDeviceInput } from './messages';
+import { RegisterDeviceInput } from '@nebula/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -65,6 +65,19 @@ export function parseDevicectlOutput(json: unknown): RegisterDeviceInput[] {
     .filter(isPaired)
     .map(toRegisterInput)
     .filter((device): device is RegisterDeviceInput => device !== null);
+}
+
+/** devicectl 결과에 정적 기기 병합 — 정적 기기가 있으면 발견 실패도 성공으로 취급 */
+export function mergeWithStatic(
+  discovered: readonly RegisterDeviceInput[] | null,
+  staticDevices: readonly RegisterDeviceInput[],
+): readonly RegisterDeviceInput[] | null {
+  if (staticDevices.length === 0) return discovered;
+  if (discovered === null) return staticDevices;
+
+  const staticIds = new Set(staticDevices.map((device) => device.id));
+  const uniqueDiscovered = discovered.filter((device) => !staticIds.has(device.id));
+  return [...uniqueDiscovered, ...staticDevices];
 }
 
 /**

@@ -1,0 +1,98 @@
+import XCTest
+
+/// Nebula Controller — "끝나지 않는 테스트"로 HTTP 서버를 상시 호스팅 (WebDriverAgent 방식)
+/// 기동: xcodebuild test -project NebulaController.xcodeproj -scheme NebulaController \
+///        -destination 'id=<UDID>' -allowProvisioningUpdates
+/// 환경: TEST_RUNNER_NEBULA_CONTROLLER_PORT (기본 8100),
+///        TEST_RUNNER_NEBULA_CONTROLLER_TOKEN (설정 시 x-nebula-token 헤더 검증)
+final class ControllerTests: XCTestCase {
+    private static let defaultPort: UInt16 = 8100
+    /// 좌표 상한 — 서버 DTO와 동일 기준 (화면 밖 좌표로 러너가 죽는 것 방지)
+    private static let maxCoordinate: Double = 10_000
+    private static let maxTextLength = 4_000
+
+    func testRunControllerServer() throws {
+        let actions = ActionHandler()
+        let environment = ProcessInfo.processInfo.environment
+        let port = environment["NEBULA_CONTROLLER_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
+        let token = environment["NEBULA_CONTROLLER_TOKEN"]
+
+        let server = try HttpServer(
+            port: port,
+            handler: { request in
+                Self.route(request: request, token: token, actions: actions)
+            },
+            onFailure: { message in
+                // 리스너 실패(포트 점유 등)를 조용히 삼키지 않고 러너를 즉시 실패시킴
+                XCTFail("HTTP 서버 실패: \(message)")
+            }
+        )
+        server.start()
+
+        // 러너를 살아있게 유지 — 절대 충족되지 않는 expectation으로 무기한 대기
+        let forever = XCTestExpectation(description: "run controller server forever")
+        let oneYearSeconds: TimeInterval = 60 * 60 * 24 * 365
+        _ = XCTWaiter.wait(for: [forever], timeout: oneYearSeconds)
+    }
+
+    /// 경로 라우팅 — Agent의 ControllerClient와 계약 일치 필수
+    private static func route(
+        request: HttpRequest, token: String?, actions: ActionHandler
+    ) -> HttpResponse {
+        if let token, request.headers["x-nebula-token"] != token {
+            return HttpResponse(status: 401, body: ["ok": false, "error": "unauthorized"])
+        }
+        if request.path == "/health" {
+            return HttpResponse(status: 200, body: ["status": "ok"])
+        }
+
+        // XCUI 조작은 메인 스레드에서 실행
+        // (전제: XCTWaiter.wait가 메인 런루프를 돌려 main.sync가 드레인됨 — WDA와 동일 패턴, 실기기 검증 필요)
+        return DispatchQueue.main.sync {
+            routeAction(path: request.path, body: request.jsonBody, actions: actions)
+        }
+    }
+
+    private static func routeAction(
+        path: String, body: [String: Any], actions: ActionHandler
+    ) -> HttpResponse {
+        if path == "/tap" {
+            guard let x = coordinate(body["x"]), let y = coordinate(body["y"]) else {
+                return badRequest("x·y는 0~\(Int(maxCoordinate)) 범위 숫자")
+            }
+            actions.tap(x: x, y: y)
+            return HttpResponse(status: 200, body: ["ok": true])
+        }
+        if path == "/swipe" {
+            guard let fromX = coordinate(body["fromX"]), let fromY = coordinate(body["fromY"]),
+                  let toX = coordinate(body["toX"]), let toY = coordinate(body["toY"]) else {
+                return badRequest("fromX/fromY/toX/toY는 0~\(Int(maxCoordinate)) 범위 숫자")
+            }
+            let durationMs = body["durationMs"] as? Double ?? 300
+            actions.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, durationMs: durationMs)
+            return HttpResponse(status: 200, body: ["ok": true])
+        }
+        if path == "/type" {
+            guard let text = body["text"] as? String, text.count <= maxTextLength else {
+                return badRequest("text는 \(maxTextLength)자 이하 문자열")
+            }
+            actions.typeText(text)
+            return HttpResponse(status: 200, body: ["ok": true])
+        }
+        if path == "/ui" {
+            let bundleId = body["bundleId"] as? String
+            return HttpResponse(status: 200, body: ["ok": true, "tree": actions.uiDump(bundleId: bundleId)])
+        }
+        return HttpResponse(status: 404, body: ["ok": false, "error": "unknown path \(path)"])
+    }
+
+    /// 좌표 검증 — 범위 밖·비숫자는 nil
+    private static func coordinate(_ raw: Any?) -> Double? {
+        guard let value = raw as? Double, value >= 0, value <= maxCoordinate else { return nil }
+        return value
+    }
+
+    private static func badRequest(_ message: String) -> HttpResponse {
+        return HttpResponse(status: 400, body: ["ok": false, "error": message])
+    }
+}

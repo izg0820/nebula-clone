@@ -1,19 +1,12 @@
-import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { WsAdapter } from '@nestjs/platform-ws';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup';
 import { DEFAULT_PORT } from './config/constants';
 
 /** 서버 부트스트랩 */
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
-
-  // Agent 터널용 raw ws 어댑터
-  app.useWebSocketAdapter(new WsAdapter(app));
-
-  // 경계 입력 검증 — 선언 외 필드 제거
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+  const app = configureApp(await NestFactory.create(AppModule));
 
   // OpenAPI 스펙 (코드 우선) — /docs
   // 주의: Swagger 라우트는 Express에 직접 등록되어 전역 가드를 타지 않음

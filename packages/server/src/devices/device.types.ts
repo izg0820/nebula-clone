@@ -1,6 +1,8 @@
-/** 디바이스 도메인 타입 */
+import { DevicePlatform, RegisterDeviceInput } from '@nebula/shared';
 
-export type DevicePlatform = 'ios';
+/** 디바이스 도메인 타입 — 프로토콜 공통 타입은 @nebula/shared에서 가져옴 */
+
+export { DevicePlatform, RegisterDeviceInput };
 export type DeviceStatus = 'online' | 'offline';
 
 /** 레지스트리에 저장되는 디바이스 상태 */
@@ -20,15 +22,6 @@ export interface Device {
   readonly occupiedAt: string | null;
   /** 마지막 하트비트 시각 (ISO) */
   readonly lastHeartbeatAt: string | null;
-}
-
-/** Agent가 등록 시 보내는 디바이스 정보 */
-export interface RegisterDeviceInput {
-  readonly id: string;
-  readonly name: string;
-  readonly platform: DevicePlatform;
-  readonly osVersion: string;
-  readonly tags: readonly string[];
 }
 
 /** 클라이언트 응답용 디바이스 — 해제 비밀값인 occupantId 제외 */

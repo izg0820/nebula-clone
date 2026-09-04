@@ -1,4 +1,4 @@
-import { loadConfig, sanitizeAgentId } from './config';
+import { loadConfig, parseControllerPorts, parseStaticDevices, sanitizeAgentId } from './config';
 
 describe('loadConfig', () => {
   const VALID_ENV = {
@@ -45,6 +45,42 @@ describe('loadConfig', () => {
     expect(() =>
       loadConfig({ ...VALID_ENV, NEBULA_DISCOVERY_INTERVAL_MS: '-1' }),
     ).toThrow(/양의 정수/);
+  });
+});
+
+describe('parseControllerPorts', () => {
+  test('udid:port 쌍 파싱, 미지정 시 빈 맵', () => {
+    const ports = parseControllerPorts('udid-1:8100, udid-2:8101');
+    expect(ports.get('udid-1')).toBe(8100);
+    expect(ports.get('udid-2')).toBe(8101);
+    expect(parseControllerPorts(undefined).size).toBe(0);
+  });
+
+  test('형식 오류·범위 밖 포트는 즉시 실패', () => {
+    expect(() => parseControllerPorts('udid-1')).toThrow(/형식 오류/);
+    expect(() => parseControllerPorts('udid-1:0')).toThrow(/형식 오류/);
+    expect(() => parseControllerPorts('udid-1:70000')).toThrow(/형식 오류/);
+  });
+});
+
+describe('parseStaticDevices', () => {
+  test('JSON 배열 파싱, 미지정 시 빈 배열', () => {
+    const devices = parseStaticDevices('[{"id":"u1","name":"Fake","osVersion":"17.0"}]');
+    expect(devices).toEqual([
+      { id: 'u1', name: 'Fake', platform: 'ios', osVersion: '17.0', tags: [] },
+    ]);
+    expect(parseStaticDevices(undefined)).toEqual([]);
+  });
+
+  test('필수 필드 누락·비배열은 즉시 실패', () => {
+    expect(() => parseStaticDevices('{}')).toThrow(/배열/);
+    expect(() => parseStaticDevices('[{"id":"u1"}]')).toThrow(/필요/);
+  });
+
+  test('tags에 비문자열이 섞이면 기동 시점에 실패 (서버의 조용한 폐기 방지)', () => {
+    expect(() =>
+      parseStaticDevices('[{"id":"u1","name":"n","osVersion":"17","tags":[1]}]'),
+    ).toThrow(/tags/);
   });
 });
 

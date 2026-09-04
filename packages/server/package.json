@@ -5,11 +5,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
-    "start:dev": "ts-node src/main.ts",
+    "start:dev": "pnpm --filter @nebula/shared build && ts-node src/main.ts",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
     "test:cov": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
   },
   "dependencies": {
+    "@nebula/shared": "workspace:*",
     "@nestjs/common": "^12.0.1",
     "@nestjs/config": "^12.0.0",
     "@nestjs/core": "^12.0.1",
@@ -31,8 +32,10 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^26.4.1",
+    "@types/supertest": "^7.2.1",
     "@types/ws": "^8.18.1",
     "jest": "^30.5.1",
+    "supertest": "^7.2.2",
     "ts-jest": "^29.4.12",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"

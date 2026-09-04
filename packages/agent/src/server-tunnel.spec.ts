@@ -38,6 +38,8 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       agentId: 'test-agent',
       discoveryIntervalMs: 60_000,
       heartbeatIntervalMs: 60_000,
+      controllerPorts: new Map<string, number>(),
+      staticDevices: [],
     };
   }
 
@@ -117,6 +119,56 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
     });
 
     createTunnel({ pingIntervalMs: 100 }).connect();
+  }, 10_000);
+
+  test('서버 command 수신 → onCommand 실행 → commandResult 회신', (done) => {
+    server.on('connection', (socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'command',
+          requestId: 'req-1',
+          deviceId: 'u1',
+          action: { kind: 'tap', x: 10, y: 20 },
+        }),
+      );
+      socket.on('message', (data) => {
+        expect(JSON.parse(data.toString())).toEqual({
+          type: 'commandResult',
+          requestId: 'req-1',
+          outcome: { ok: true, result: 'tapped' },
+        });
+        done();
+      });
+    });
+
+    tunnel = new ServerTunnel(createConfig(), {
+      onOpen: () => undefined,
+      onCommand: async (command) => {
+        expect(command.action).toEqual({ kind: 'tap', x: 10, y: 20 });
+        return { ok: true, result: 'tapped' };
+      },
+    });
+    tunnel.connect();
+  }, 10_000);
+
+  test('onCommand가 예외를 던져도 실패 outcome으로 회신', (done) => {
+    server.on('connection', (socket) => {
+      socket.send(
+        JSON.stringify({ type: 'command', requestId: 'req-2', deviceId: 'u1', action: { kind: 'uiDump' } }),
+      );
+      socket.on('message', (data) => {
+        const message = JSON.parse(data.toString());
+        expect(message.requestId).toBe('req-2');
+        expect(message.outcome.ok).toBe(false);
+        done();
+      });
+    });
+
+    tunnel = new ServerTunnel(createConfig(), {
+      onOpen: () => undefined,
+      onCommand: () => Promise.reject(new Error('boom')),
+    });
+    tunnel.connect();
   }, 10_000);
 
   test('close 후에는 재연결하지 않음', (done) => {

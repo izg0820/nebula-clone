@@ -1,0 +1,38 @@
+# XcodeGen 프로젝트 정의 — `xcodegen generate`로 .xcodeproj 생성
+# (XCUITest는 순수 SPM으로 기기 실행이 불가해 Xcode 프로젝트 필요)
+name: NebulaController
+options:
+  bundleIdPrefix: dev.nebula
+  deploymentTarget:
+    iOS: "16.0"
+
+targets:
+  NebulaHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    info:
+      path: Host/Info.plist
+      properties:
+        UILaunchScreen: {}
+        CFBundleDisplayName: Nebula Host
+    settings:
+      base:
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+  NebulaControllerUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ControllerUITests]
+    dependencies:
+      - target: NebulaHost
+
+schemes:
+  NebulaController:
+    build:
+      targets:
+        NebulaHost: all
+        NebulaControllerUITests: [test]
+    test:
+      targets:
+        - NebulaControllerUITests

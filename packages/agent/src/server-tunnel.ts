@@ -1,11 +1,15 @@
 import WebSocket from 'ws';
-import { AgentConfig } from './config';
-import { logger } from './logger';
 import {
+  buildCommandResultMessage,
   buildHeartbeatMessage,
   buildRegisterMessage,
+  CommandMessage,
+  CommandOutcome,
+  parseServerMessage,
   RegisterDeviceInput,
-} from './messages';
+} from '@nebula/shared';
+import { AgentConfig } from './config';
+import { logger } from './logger';
 
 /** 재연결 백오프 상수 */
 const BACKOFF_BASE_MS = 1_000;
@@ -33,6 +37,8 @@ export function backoffDelayMs(attempt: number): number {
 export interface TunnelCallbacks {
   /** 연결(재연결 포함) 성립 직후 — 즉시 재등록용 */
   readonly onOpen: () => void;
+  /** 서버 명령 수신 시 — 실행 결과를 반환하면 터널이 commandResult로 회신 */
+  readonly onCommand?: (command: CommandMessage) => Promise<CommandOutcome>;
 }
 
 /** 테스트용 타이밍 오버라이드 */
@@ -100,6 +106,10 @@ export class ServerTunnel {
       this.clearTimer('pongTimeoutTimer');
     });
 
+    socket.on('message', (data: Buffer | string) => {
+      void this.handleServerMessage(data.toString());
+    });
+
     socket.on('close', (code: number) => {
       this.stopConnectionTimers();
       this.logClose(code);
@@ -126,6 +136,32 @@ export class ServerTunnel {
     this.clearTimer('reconnectTimer');
     this.stopConnectionTimers();
     this.socket?.close();
+  }
+
+  /** 서버 명령 수신 → 실행 → commandResult 회신. 예외는 실패 응답으로 변환 */
+  private async handleServerMessage(raw: string): Promise<void> {
+    const message = parseServerMessage(raw);
+    if (!message) {
+      logger.warn('잘못된 서버 메시지 무시');
+      return;
+    }
+    if (!this.callbacks.onCommand) {
+      this.send(
+        JSON.stringify(
+          buildCommandResultMessage(message.requestId, { ok: false, error: 'command handler 없음' }),
+        ),
+      );
+      return;
+    }
+
+    const outcome = await this.callbacks.onCommand(message).catch((error: unknown): CommandOutcome => {
+      logger.error({ err: error }, '명령 처리 중 예외');
+      return { ok: false, error: '명령 처리 중 내부 오류' };
+    });
+    const sent = this.send(JSON.stringify(buildCommandResultMessage(message.requestId, outcome)));
+    if (!sent) {
+      logger.warn({ requestId: message.requestId }, '터널 미연결로 명령 응답 유실');
+    }
   }
 
   private send(payload: string): boolean {

@@ -1,5 +1,5 @@
 import { logger } from './logger';
-import { RegisterDeviceInput } from './messages';
+import { RegisterDeviceInput } from '@nebula/shared';
 
 /** 이 횟수 연속 발견 실패 시에만 기기 목록을 비움 — 일시 오류로 점유가 풀리는 것 방지 */
 const MAX_CONSECUTIVE_FAILURES = 5;

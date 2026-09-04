@@ -15,10 +15,11 @@
 ## 모노레포 구조 (Nx package-based + pnpm workspace)
 
 ```
-packages/server   # @nebula/server — NestJS 오케스트레이션 (구현됨, Phase 1)
-packages/agent    # 맥미니 데몬, plain TS — 프레임워크 금지 (예정)
+packages/server   # @nebula/server — NestJS 오케스트레이션 (Phase 1 + 명령 프록시)
+packages/agent    # @nebula/agent — 맥미니 데몬, plain TS — 프레임워크 금지
+packages/shared   # @nebula/shared — WS 프로토콜·액션 타입 단일 정의 (server/agent 공용)
 packages/web      # React 콘솔 (예정)
-controller-ios/   # Swift/XCUITest — pnpm workspace 밖 (예정)
+controller-ios/   # Swift/XCUITest + XcodeGen — pnpm workspace 밖 (빌드 미검증)
 ```
 
 - Nx는 package-based 모드 — `project.json` 만들지 말 것. 각 패키지 `package.json` 스크립트가 태스크
@@ -78,11 +79,16 @@ controller-ios/   # Swift/XCUITest — pnpm workspace 밖 (예정)
 
 ## 현재 상태 (2026-09-04)
 
-- Phase 1 서버 완료: occupy/release/레지스트리/토큰 인증/WS 터널/하트비트 만료/rate limit. 테스트 40개 통과
-- 코드 리뷰 HIGH 5건 수정 완료. **MEDIUM 백로그 남음**: heartbeat 미매칭 무시(재등록 유도 필요),
-  두 오프라인 경로의 `agent_id` 처리 불일치, 토큰 쿼리스트링 허용(프록시 로그 노출), supertest e2e 부재,
-  WS maxPayload 미설정 — Phase 2 진행 중 정리
-- 다음 작업: `packages/agent` (devicectl 기기 발견, WS 터널, 하트비트, Controller 프로세스 감시)
+- **Phase 1 완료**: 서버(occupy/release/레지스트리/인증/하트비트 만료/rate limit) + Agent(기기 발견,
+  WS 터널, 백오프 재연결, ping keepalive). 리뷰(내부 Opus + Codex) HIGH 전부 반영
+- **Phase 2 파이프라인 완료**: `POST /devices/:id/actions/{tap,swipe,type,ui-dump}` → 게이트웨이
+  sendCommand(requestId 상관, 15초 타임아웃) → Agent CommandExecutor → Controller HTTP.
+  가짜 Controller로 e2e 검증 완료. 프로토콜은 `@nebula/shared`로 추출됨
+- **Phase 2 남은 것**: controller-ios 실기기 빌드·검증(맥미니 필요), Agent의 xcodebuild
+  수퍼바이저(기동·감시·재시작), iproxy 포워딩 관리. Agent의 Controller 주소는 임시로
+  `NEBULA_CONTROLLER_PORTS` 정적 설정, 기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES` 사용
+- **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,
+  토큰 쿼리스트링 허용, supertest e2e 부재, WS maxPayload 미설정, agentId 정규화 충돌
 
 ## 이 프로젝트만의 주의
 

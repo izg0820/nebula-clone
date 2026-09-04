@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AgentsModule } from './agents/agents.module';
+import { CommandsModule } from './commands/commands.module';
 import { TokenGuard } from './auth/token.guard';
 import { RATE_LIMIT_PER_MINUTE } from './config/constants';
 import { validateEnv } from './config/env.validation';
@@ -20,6 +21,7 @@ import { StorageModule } from './storage/storage.module';
     StorageModule,
     DevicesModule,
     AgentsModule,
+    CommandsModule,
   ],
   controllers: [HealthController],
   providers: [

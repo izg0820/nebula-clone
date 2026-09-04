@@ -1,4 +1,5 @@
 import { hostname } from 'os';
+import { RegisterDeviceInput } from '@nebula/shared';
 
 /** Agent 설정 */
 export interface AgentConfig {
@@ -9,6 +10,10 @@ export interface AgentConfig {
   readonly agentId: string;
   readonly discoveryIntervalMs: number;
   readonly heartbeatIntervalMs: number;
+  /** 기기 UDID → Controller HTTP 포트 (정적 설정, 수퍼바이저 도입 전까지) */
+  readonly controllerPorts: ReadonlyMap<string, number>;
+  /** devicectl 없이 등록할 정적 기기 목록 (개발·파이프라인 검증용) */
+  readonly staticDevices: readonly RegisterDeviceInput[];
 }
 
 /** 서버 게이트웨이와 동일한 agentId 허용 형식 */
@@ -23,6 +28,57 @@ export function sanitizeAgentId(raw: string): string {
   const sanitized = raw.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64);
   if (sanitized.length === 0) return 'agent';
   return sanitized;
+}
+
+/** 'udid:8100,udid2:8101' → Map. 형식 오류 시 즉시 실패 */
+export function parseControllerPorts(raw: string | undefined): ReadonlyMap<string, number> {
+  const ports = new Map<string, number>();
+  if (!raw || raw.trim().length === 0) return ports;
+
+  for (const pair of raw.split(',')) {
+    const [deviceId, portText] = pair.split(':').map((part) => part.trim());
+    const port = Number(portText);
+    if (!deviceId || !Number.isInteger(port) || port <= 0 || port > 65_535) {
+      throw new Error(`NEBULA_CONTROLLER_PORTS 형식 오류: "${pair}" (udid:port,udid2:port)`);
+    }
+    ports.set(deviceId, port);
+  }
+  return ports;
+}
+
+/** 정적 기기 JSON 파싱 — 형식 오류 시 즉시 실패 (개발·검증용 입력이므로 관대하지 않음) */
+export function parseStaticDevices(raw: string | undefined): readonly RegisterDeviceInput[] {
+  if (!raw || raw.trim().length === 0) return [];
+
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) throw new Error('NEBULA_STATIC_DEVICES는 JSON 배열이어야 함');
+
+  return parsed.map((entry: unknown): RegisterDeviceInput => {
+    const record = entry as Record<string, unknown>;
+    if (
+      typeof record?.id !== 'string' ||
+      typeof record?.name !== 'string' ||
+      typeof record?.osVersion !== 'string'
+    ) {
+      throw new Error('NEBULA_STATIC_DEVICES 항목에 id/name/osVersion 필요');
+    }
+    return {
+      id: record.id,
+      name: record.name,
+      platform: 'ios',
+      osVersion: record.osVersion,
+      tags: parseTags(record.tags),
+    };
+  });
+}
+
+/** tags 엄격 검증 — 비문자열이 섞이면 서버가 register 전체를 폐기하므로 기동 시점에 실패시킴 */
+function parseTags(raw: unknown): readonly string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.some((tag: unknown) => typeof tag !== 'string')) {
+    throw new Error('NEBULA_STATIC_DEVICES tags는 문자열 배열이어야 함');
+  }
+  return raw as string[];
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -63,5 +119,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
       env.NEBULA_HEARTBEAT_INTERVAL_MS,
       DEFAULT_HEARTBEAT_INTERVAL_MS,
     ),
+    controllerPorts: parseControllerPorts(env.NEBULA_CONTROLLER_PORTS),
+    staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
   };
 }

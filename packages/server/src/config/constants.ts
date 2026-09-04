@@ -14,3 +14,6 @@ export const AGENT_WS_PATH = '/agent';
 
 /** IP당 분당 요청 상한 (무차별 토큰 대입 완화) */
 export const RATE_LIMIT_PER_MINUTE = 120;
+
+/** 기기 명령 응답 대기 상한 (ms) — 초과 시 클라이언트에 504 */
+export const COMMAND_TIMEOUT_MS = 15_000;

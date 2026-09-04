@@ -3,15 +3,22 @@ import type { IncomingMessage } from 'http';
 import { EventEmitter } from 'events';
 import type { WebSocket } from 'ws';
 import { DevicesService } from '../devices/devices.service';
-import { AgentsGateway } from './agents.gateway';
+import { AgentNotConnectedError, AgentsGateway } from './agents.gateway';
 
-/** close 호출을 기록하는 목 소켓 */
+/** close·send 호출을 기록하는 목 소켓 */
 class FakeSocket extends EventEmitter {
   agentId?: string;
   closedWith: { code?: number; reason?: string } | null = null;
+  sentPayloads: string[] = [];
+  readonly OPEN = 1;
+  readyState = 1;
 
   close(code?: number, reason?: string): void {
     this.closedWith = { code, reason };
+  }
+
+  send(payload: string): void {
+    this.sentPayloads.push(payload);
   }
 }
 
@@ -150,6 +157,111 @@ describe('AgentsGateway', () => {
         }),
       ),
     ).not.toThrow();
+  });
+
+  test('sendCommand는 터널로 명령 전송 후 commandResult로 resolve', async () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'tap', x: 1, y: 2 });
+
+    // 전송된 command 메시지 확인 후 Agent 응답 시뮬레이션
+    const sent = JSON.parse(socket.sentPayloads[0]);
+    expect(sent).toMatchObject({
+      type: 'command',
+      deviceId: 'udid-1',
+      action: { kind: 'tap', x: 1, y: 2 },
+    });
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'commandResult',
+        requestId: sent.requestId,
+        outcome: { ok: true, result: 'done' },
+      }),
+    );
+
+    await expect(pending).resolves.toEqual({ ok: true, result: 'done' });
+  });
+
+  test('sendCommand는 응답 없으면 타임아웃 실패로 resolve', async () => {
+    jest.useFakeTimers();
+    try {
+      const { gateway } = createGateway();
+      const socket = new FakeSocket();
+      gateway.handleConnection(
+        socket as unknown as WebSocket,
+        createRequest('/agent?token=agent-token&agentId=agent-1'),
+      );
+
+      const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+      jest.advanceTimersByTime(20_000);
+
+      await expect(pending).resolves.toEqual({ ok: false, error: 'timeout' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('Agent 연결 종료 시 in-flight 명령이 즉시 agent_disconnected로 실패', async () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+    gateway.handleDisconnect(socket as unknown as WebSocket);
+
+    await expect(pending).resolves.toEqual({ ok: false, error: 'agent_disconnected' });
+  });
+
+  test('다른 Agent가 보낸 commandResult는 매칭하지 않음', async () => {
+    jest.useFakeTimers();
+    try {
+      const { gateway } = createGateway();
+      const target = new FakeSocket();
+      const intruder = new FakeSocket();
+      gateway.handleConnection(
+        target as unknown as WebSocket,
+        createRequest('/agent?token=agent-token&agentId=agent-1'),
+      );
+      gateway.handleConnection(
+        intruder as unknown as WebSocket,
+        createRequest('/agent?token=agent-token&agentId=agent-2'),
+      );
+
+      const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+      const sent = JSON.parse(target.sentPayloads[0]);
+
+      // 다른 Agent가 requestId를 가로채 응답 — 무시돼야 함
+      intruder.emit(
+        'message',
+        JSON.stringify({
+          type: 'commandResult',
+          requestId: sent.requestId,
+          outcome: { ok: true, result: 'hijacked' },
+        }),
+      );
+      jest.advanceTimersByTime(20_000);
+
+      await expect(pending).resolves.toEqual({ ok: false, error: 'timeout' });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('sendCommand는 터널 미연결이면 즉시 거부', async () => {
+    const { gateway } = createGateway();
+
+    await expect(gateway.sendCommand('없는-agent', 'udid-1', { kind: 'uiDump' })).rejects.toThrow(
+      AgentNotConnectedError,
+    );
   });
 
   test('인증 실패한 소켓의 disconnect는 아무것도 하지 않음', () => {

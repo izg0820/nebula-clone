@@ -1,5 +1,5 @@
 import { DiscoveryState } from './discovery-state';
-import { RegisterDeviceInput } from './messages';
+import { RegisterDeviceInput } from '@nebula/shared';
 
 const IPHONE: RegisterDeviceInput = {
   id: 'u1',

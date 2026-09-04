@@ -104,7 +104,8 @@ sequenceDiagram
   → AVFoundation 캡처 → VideoToolbox H.264 → WS (원문의 해법. 조작과 충돌 없이 고프레임 — 미검증)
 - **웹 콘솔**: React + TypeScript, WebCodecs로 H.264 디코딩 (추정 — 미지원 브라우저면 jMuxer 등 대안, 미검증)
 - **저장소**: SQLite (레지스트리 + 점유 상태)
-- **레포 구조**: pnpm workspace 모노레포 (`server` / `agent` / `web`) + `controller-ios` (Swift 패키지)
+- **레포 구조**: pnpm workspace + Nx 모노레포 (`server` / `agent` / `shared` / `web`) +
+  `controller-ios` (Swift, XcodeGen — workspace 밖)
 
 ## 실행 환경 요구사항
 
@@ -133,8 +134,9 @@ pnpm build && pnpm start
 
 - [x] **Phase 1 — 뼈대**: NestJS 서버(occupy/release/레지스트리/토큰 인증) + Agent(devicectl 기기 발견,
       WS 터널, 하트비트) — 로컬 e2e 구동 확인 (오라클 배포·실기기 발견은 미확인)
-- [ ] **Phase 2 — 제어**: XCUITest Controller (탭·스와이프·텍스트 입력·UI 덤프), Agent가 자동 기동·감시,
-      서버 경유 end-to-end 조작
+- [~] **Phase 2 — 제어**: 명령 파이프라인(클라이언트→서버→터널→Agent→Controller HTTP) 구현·e2e 검증 완료,
+      XCUITest Controller 소스 작성 완료(빌드 미검증 — 맥미니+실기기 필요). 남은 것: 실기기 검증,
+      Agent의 xcodebuild 수퍼바이저(자동 기동·감시), iproxy 포트 포워딩 관리
 - [ ] **Phase 3 — 미러링**: ①스크린샷 MJPEG로 먼저 화면 확보 → ②AVFoundation H.264로 교체,
       웹 콘솔에서 보면서 조작
 - [ ] **Phase 4 — 확장**: CLI/SDK (생성된 OpenAPI 스펙에서 클라이언트 생성), 프로세스 자동 복구,

@@ -1,5 +1,6 @@
+import { CommandExecutor } from './command-executor';
 import { loadConfig } from './config';
-import { discoverDevices } from './device-discovery';
+import { discoverDevices, mergeWithStatic } from './device-discovery';
 import { DiscoveryState } from './discovery-state';
 import { logger } from './logger';
 import { ServerTunnel } from './server-tunnel';
@@ -10,6 +11,7 @@ async function main(): Promise<void> {
   logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Agent 시작');
 
   const discoveryState = new DiscoveryState();
+  const executor = new CommandExecutor(config.controllerPorts);
   let isDiscoveryInFlight = false;
 
   const tunnel = new ServerTunnel(config, {
@@ -17,6 +19,7 @@ async function main(): Promise<void> {
       // 재연결 직후 즉시 재등록 — 서버가 오프라인 처리했을 수 있음
       void discoverAndRegister();
     },
+    onCommand: (command) => executor.execute(command),
   });
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
@@ -27,7 +30,7 @@ async function main(): Promise<void> {
     }
     isDiscoveryInFlight = true;
     try {
-      const result = await discoverDevices();
+      const result = mergeWithStatic(await discoverDevices(), config.staticDevices);
       const shouldRegister = discoveryState.apply(result);
       if (!shouldRegister) return;
 
