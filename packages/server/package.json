@@ -1,0 +1,40 @@
+{
+  "name": "@nebula/server",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "start:dev": "ts-node src/main.ts",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "test:cov": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.0.1",
+    "@nestjs/config": "^12.0.0",
+    "@nestjs/core": "^12.0.1",
+    "@nestjs/platform-express": "^12.0.1",
+    "@nestjs/platform-ws": "^12.0.1",
+    "@nestjs/schedule": "^12.0.1",
+    "@nestjs/swagger": "^12.0.1",
+    "@nestjs/throttler": "^6.5.0",
+    "@nestjs/websockets": "^12.0.1",
+    "better-sqlite3": "^13.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^12.0.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.4.1",
+    "@types/ws": "^8.18.1",
+    "jest": "^30.5.1",
+    "ts-jest": "^29.4.12",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
