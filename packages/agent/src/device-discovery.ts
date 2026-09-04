@@ -24,6 +24,18 @@ function getString(value: unknown, key: string): string | null {
   return child;
 }
 
+/**
+ * iOS 계열 판별 — 실제 CoreDevice 출력은 hardwareProperties.platform('iOS')이 표준이고,
+ * 구형/변형 출력 대비로 deviceProperties.platformIdentifier도 함께 허용 (실기기 확정 전 방어적 파싱)
+ */
+function isIosPlatform(hardware: unknown, properties: unknown): boolean {
+  const hardwarePlatform = (getString(hardware, 'platform') ?? '').toLowerCase();
+  if (hardwarePlatform === 'ios' || hardwarePlatform === 'ipados') return true;
+
+  const platformId = getString(properties, 'platformIdentifier') ?? '';
+  return platformId.includes('iphoneos') || platformId.includes('ipados');
+}
+
 /** devicectl 디바이스 항목 → 등록 정보 변환 (iPhone/iPad 외·필드 누락 시 null) */
 function toRegisterInput(entry: unknown): RegisterDeviceInput | null {
   const hardware = getRecord(entry, 'hardwareProperties');
@@ -31,10 +43,9 @@ function toRegisterInput(entry: unknown): RegisterDeviceInput | null {
   const udid = getString(hardware, 'udid');
   const name = getString(properties, 'name');
   const osVersion = getString(properties, 'osVersionNumber');
-  const platformId = getString(properties, 'platformIdentifier') ?? '';
 
   if (!udid || !name || !osVersion) return null;
-  if (!platformId.includes('iphoneos') && !platformId.includes('ipados')) return null;
+  if (!isIosPlatform(hardware, properties)) return null;
 
   return { id: udid, name, platform: 'ios', osVersion, tags: [] };
 }
@@ -57,10 +68,10 @@ export function parseDevicectlOutput(json: unknown): RegisterDeviceInput[] {
 }
 
 /**
- * USB 연결된 iOS 기기 발견 — devicectl 부재·실패 시 빈 배열 (치명적이지 않음)
- * devicectl은 JSON을 파일로만 출력하므로 임시 파일 경유
+ * USB 연결된 iOS 기기 발견 — devicectl은 JSON을 파일로만 출력하므로 임시 파일 경유
+ * @return 성공 시 기기 목록 (없으면 빈 배열), 실패 시 null — "기기 없음"과 "발견 실패"를 구분
  */
-export async function discoverDevices(): Promise<RegisterDeviceInput[]> {
+export async function discoverDevices(): Promise<RegisterDeviceInput[] | null> {
   const outputPath = join(tmpdir(), `nebula-devicectl-${randomUUID()}.json`);
   try {
     await execFileAsync('xcrun', ['devicectl', 'list', 'devices', '--json-output', outputPath], {
@@ -69,8 +80,8 @@ export async function discoverDevices(): Promise<RegisterDeviceInput[]> {
     const raw = await readFile(outputPath, 'utf8');
     return parseDevicectlOutput(JSON.parse(raw) as unknown);
   } catch (error) {
-    logger.warn({ err: error }, '기기 발견 실패 — 빈 목록으로 진행 (Xcode 미설치·기기 미연결 가능)');
-    return [];
+    logger.warn({ err: error }, '기기 발견 실패 (Xcode 미설치·devicectl 오류 가능)');
+    return null;
   } finally {
     await unlink(outputPath).catch(() => undefined);
   }

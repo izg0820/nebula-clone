@@ -1,7 +1,7 @@
 import { AddressInfo } from 'net';
 import { WebSocketServer } from 'ws';
 import { AgentConfig } from './config';
-import { backoffDelayMs, ServerTunnel } from './server-tunnel';
+import { backoffDelayMs, ServerTunnel, TunnelTimings } from './server-tunnel';
 
 describe('backoffDelayMs', () => {
   test('지수 증가 후 상한에서 고정', () => {
@@ -15,8 +15,10 @@ describe('backoffDelayMs', () => {
 describe('ServerTunnel (실제 WS 서버 연동)', () => {
   let server: WebSocketServer;
   let serverUrl: string;
+  let tunnel: ServerTunnel | null;
 
   beforeEach((done) => {
+    tunnel = null;
     server = new WebSocketServer({ port: 0 }, () => {
       const { port } = server.address() as AddressInfo;
       serverUrl = `ws://127.0.0.1:${port}/agent`;
@@ -25,6 +27,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
   });
 
   afterEach((done) => {
+    tunnel?.close();
     server.close(() => done());
   });
 
@@ -38,12 +41,15 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
     };
   }
 
+  function createTunnel(timings: TunnelTimings = {}): ServerTunnel {
+    tunnel = new ServerTunnel(createConfig(), { onOpen: () => undefined }, timings);
+    return tunnel;
+  }
+
   test('Authorization 헤더·agentId 쿼리로 연결하고 register를 전송', (done) => {
     const config = createConfig();
-    let tunnel: ServerTunnel;
 
     server.on('connection', (socket, request) => {
-      // Assert: 인증 헤더와 agentId 쿼리 확인
       expect(request.headers.authorization).toBe(`Bearer ${config.agentToken}`);
       expect(request.url).toContain('agentId=test-agent');
 
@@ -55,14 +61,13 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
             { id: 'u1', name: 'iPhone', platform: 'ios', osVersion: '17.5', tags: [] },
           ],
         });
-        tunnel.close();
         done();
       });
     });
 
     tunnel = new ServerTunnel(config, {
       onOpen: () => {
-        tunnel.sendRegister([
+        tunnel?.sendRegister([
           { id: 'u1', name: 'iPhone', platform: 'ios', osVersion: '17.5', tags: [] },
         ]);
       },
@@ -71,29 +76,65 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
   });
 
   test('미연결 상태 전송은 false 반환 (throw 금지)', () => {
-    const tunnel = new ServerTunnel(createConfig(), { onOpen: () => undefined });
-
-    expect(tunnel.sendHeartbeat(['u1'])).toBe(false);
+    expect(createTunnel().sendHeartbeat(['u1'])).toBe(false);
   });
 
-  test('close 후에는 재연결하지 않음', (done) => {
-    const config = createConfig();
-    let connections = 0;
+  test('즉시 거부되는 연결(open 직후 close)에서 백오프 카운터가 리셋되지 않음', (done) => {
+    // 서버가 핸드셰이크 후 즉시 종료 — 4401과 같은 순서(open → close)를 비종단 코드로 재현
+    server.on('connection', (socket) => {
+      socket.close(4402, 'rejected');
+    });
 
+    const rejected = createTunnel();
+    rejected.connect();
+
+    // 1차 재시도(1초) 후 2차 거부까지 관찰 — open이 리셋했다면 attemptCount가 0·1에 머묾
+    setTimeout(() => {
+      expect(rejected.attemptCount).toBeGreaterThanOrEqual(2);
+      done();
+    }, 1_600);
+  }, 10_000);
+
+  test('종단 close 코드(4401)는 즉시 재시도하지 않음', (done) => {
+    let connections = 0;
+    server.on('connection', (socket) => {
+      connections += 1;
+      socket.close(4401, 'unauthorized');
+    });
+
+    createTunnel().connect();
+
+    // 종단 코드는 상한 간격(30초) 재시도 — 1.5초 안에 재연결이 없어야 함
+    setTimeout(() => {
+      expect(connections).toBe(1);
+      done();
+    }, 1_500);
+  }, 10_000);
+
+  test('주기 ping 전송 (keepalive)', (done) => {
+    server.on('connection', (socket) => {
+      socket.on('ping', () => done());
+    });
+
+    createTunnel({ pingIntervalMs: 100 }).connect();
+  }, 10_000);
+
+  test('close 후에는 재연결하지 않음', (done) => {
+    let connections = 0;
     server.on('connection', () => {
       connections += 1;
     });
 
-    const tunnel = new ServerTunnel(config, {
+    const closable = new ServerTunnel(createConfig(), {
       onOpen: () => {
-        tunnel.close();
-        // 종료 후 재연결이 없는지 백오프 1회분 이상 대기 후 확인
+        closable.close();
         setTimeout(() => {
           expect(connections).toBe(1);
           done();
         }, 1_200);
       },
     });
-    tunnel.connect();
-  });
+    tunnel = closable;
+    closable.connect();
+  }, 10_000);
 });
