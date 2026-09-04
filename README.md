@@ -131,8 +131,8 @@ pnpm build && pnpm start
 
 ## 로드맵
 
-- [ ] **Phase 1 — 뼈대**: NestJS 서버(occupy/release/레지스트리/토큰 인증) + Agent(devicectl 기기 발견,
-      WS 터널, 하트비트) — 오라클↔맥미니 연결까지 실제 구동 확인
+- [x] **Phase 1 — 뼈대**: NestJS 서버(occupy/release/레지스트리/토큰 인증) + Agent(devicectl 기기 발견,
+      WS 터널, 하트비트) — 로컬 e2e 구동 확인 (오라클 배포·실기기 발견은 미확인)
 - [ ] **Phase 2 — 제어**: XCUITest Controller (탭·스와이프·텍스트 입력·UI 덤프), Agent가 자동 기동·감시,
       서버 경유 end-to-end 조작
 - [ ] **Phase 3 — 미러링**: ①스크린샷 MJPEG로 먼저 화면 확보 → ②AVFoundation H.264로 교체,
