@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.log
+.env
+*.sqlite*
+.DS_Store
+coverage/
+.nx/cache
+.nx/workspace-data

@@ -1,0 +1,17 @@
+{
+  "name": "nebula-clone",
+  "private": true,
+  "scripts": {
+    "build": "nx run-many -t build",
+    "test": "nx run-many -t test",
+    "lint": "nx run-many -t lint",
+    "graph": "nx graph",
+    "affected": "nx affected -t build test"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "nx": "^23.2.0"
+  }
+}
