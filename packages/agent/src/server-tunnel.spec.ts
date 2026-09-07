@@ -41,6 +41,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       controllerPorts: new Map<string, number>(),
       staticDevices: [],
       supervisor: null,
+      mirrorHelperPath: null,
     };
   }
 

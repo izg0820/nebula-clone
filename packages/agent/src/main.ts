@@ -61,7 +61,12 @@ async function main(): Promise<void> {
       streamManager.stop(deviceId);
     },
   });
-  const streamManager = new StreamManager(resolver, (frame) => tunnel.sendFrame(frame));
+  const streamManager = new StreamManager(resolver, (frame) => tunnel.sendFrame(frame), {
+    helperPath: config.mirrorHelperPath,
+    // 발견 결과의 기기 이름 — mirror-helper의 캡처 장치 매칭(--name)에 사용
+    resolveDeviceName: (deviceId) =>
+      discoveryState.current.find((device) => device.id === deviceId)?.name ?? null,
+  });
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {

@@ -17,6 +17,8 @@ export interface AgentConfig {
   readonly staticDevices: readonly RegisterDeviceInput[];
   /** xcodebuild 수퍼바이저 설정 (null이면 정적 포트 모드) */
   readonly supervisor: SupervisorEnvConfig | null;
+  /** mirror-helper 바이너리 경로 — 지정 시 H.264 미러링, 미지정 시 JPEG 폴백 */
+  readonly mirrorHelperPath: string | null;
 }
 
 /** 수퍼바이저 환경 설정 */
@@ -164,5 +166,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
     controllerPorts: parseControllerPorts(env.NEBULA_CONTROLLER_PORTS),
     staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
     supervisor: parseSupervisorConfig(env),
+    mirrorHelperPath: env.NEBULA_MIRROR_HELPER ?? null,
   };
 }

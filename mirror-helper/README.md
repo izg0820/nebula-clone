@@ -1,28 +1,39 @@
-# mirror-helper (보류 — macOS 26에서 차단)
+# mirror-helper — iOS 화면 → H.264 스트림 (원문 방식, macOS 26 동작 확인)
 
-원문 Nebula의 미러링 해법(macOS 내장 iOS 화면 캡처 장치 + H.264)을 재현하려던 Swift CLI.
-CoreMediaIO `AllowScreenCaptureDevices` 활성화 → AVFoundation 캡처 → VideoToolbox H.264 →
-stdout 프레임 스트림까지 구현돼 있으나, **macOS 26에서는 동작하지 않는다.**
+USB 연결된 iPhone을 macOS 화면 캡처 장치(CoreMediaIO)로 열어 VideoToolbox H.264로 인코딩,
+stdout으로 프레임 스트림을 출력하는 Swift CLI. **실기기 검증 완료 (2026-09-07): 40fps, 8KB/frame.**
+Agent가 `NEBULA_MIRROR_HELPER`로 기기당 1프로세스를 스폰한다 (미지정 시 JPEG 폴백 3.5fps).
 
-## 차단 판정 근거 (2026-09-07 실측)
+## macOS 26에서의 함정 두 개 (실측으로 확인)
 
-- USB 연결·잠금 해제·카메라 권한 허용 상태에서 CMIO 저수준 열거에도 iPhone 캡처 장치 미발행
-- **QuickTime Player의 동영상 녹화 소스에도 iPhone이 나타나지 않음** — OS 레벨에서 경로 자체가 사라짐
-- 구형 DAL 플러그인 아키텍처가 macOS 26에서 제거되면서 Apple의 iOS USB 캡처 장치도
-  함께 사라진 것으로 추정 (Apple 공식 문서로는 미확인)
+1. **AVCaptureDevice.DiscoverySession에 iOS 캡처 장치가 안 보인다** — CMIO 저수준
+   열거(`kCMIOHardwarePropertyDevices`)로 UID를 얻어 `AVCaptureDevice(uniqueID:)`로 직접
+   열어야 한다. 이 코드는 그렇게 구현돼 있다.
+2. **장치 발행 트리거**: 우리의 `AllowScreenCaptureDevices` 속성 설정만으로는 즉시 발행되지
+   않았고, QuickTime의 녹화 소스 열람이 최초 발행을 트리거했다. 발행 후에는 QuickTime을
+   종료해도 유지됨. ⚠ **콜드 스타트(USB 재연결·재부팅 후) 자가 발행 여부 미검증** — 안 되면
+   `osascript`로 QuickTime을 잠깐 열었다 닫는 활성화 킥이 필요할 수 있다 (수퍼바이저 백로그).
 
-## 재검토 조건
+## 프레임 형식 (stdout)
 
-- **구버전 macOS(15 이하) 호스트**에서는 동작할 가능성 높음 — 맥미니가 구버전이면 이 코드로 재시도
-- 대안: QuickTime USB 프로토콜 직접 구현(quicktime_video_hack류) — 고난도, 최신 iOS 지원 불확실
+```
+[UInt32 BE payload 길이][UInt8 키프레임(1/0)][Annex-B H.264 access unit]
+```
+키프레임 앞에는 SPS/PPS 포함 (중간 합류 시청자 디코더 초기화). 키프레임 간격 2초, B-프레임 없음.
 
-## 현재 미러링 구현
-
-XCUITest 스크린샷 푸시 스트리밍(`packages/agent/src/stream-manager.ts`)이 대신 사용 중 — 3.5fps.
+## 사용
 
 ```bash
-swift build
-./.build/debug/mirror-helper --list        # 캡처 장치 나열 (진단 로그 포함)
-./.build/debug/mirror-helper --list-cmio   # CMIO 저수준 열거 (진단용)
-./.build/debug/mirror-helper --udid <UDID> # H.264 스트림 (동작 환경에서)
+swift build                                   # 배포는 -c release 권장
+./.build/debug/mirror-helper --list           # AVFoundation 열거 진단
+./.build/debug/mirror-helper --list-cmio      # CMIO 저수준 열거 (UID 확인)
+./.build/debug/mirror-helper --name wincrane2 # 기기 이름으로 스트림 시작
 ```
+
+`--name`은 devicectl의 기기 이름과 일치해야 한다 (다중 기기 구분). 카메라 권한(TCC) 필요 —
+최초 실행 시 허용.
+
+## 다중 기기
+
+기기마다 독립된 캡처 장치가 발행되므로 기기당 헬퍼 1프로세스로 확장된다.
+USB 대역폭이 병목이 될 수 있으니 허브 구성에 유의 (원문의 "USB 케이블·허브 선정 기준").

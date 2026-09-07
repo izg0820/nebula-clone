@@ -44,7 +44,14 @@ describe('StreamsRelayService', () => {
     relay.addViewer('u1', closed as unknown as WebSocket);
     relay.addViewer('u2', otherDevice as unknown as WebSocket);
 
-    relay.broadcast('u1', 430, 932, new Uint8Array([0xff, 0xd8]));
+    relay.broadcast({
+      deviceId: 'u1',
+      format: 1,
+      isKey: true,
+      width: 430,
+      height: 932,
+      payload: new Uint8Array([0xff, 0xd8]),
+    });
 
     expect(watching.sent).toHaveLength(1);
     expect(closed.sent).toHaveLength(0);

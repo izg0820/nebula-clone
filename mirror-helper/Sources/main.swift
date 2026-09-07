@@ -50,26 +50,45 @@ func enableScreenCaptureDevices() {
     )
 }
 
-/// iOS 화면 캡처 장치 검색 — 활성화 직후엔 장치 등록에 수 초 걸릴 수 있어 재시도
-func findDevice(udid: String?, timeoutSeconds: Int) -> AVCaptureDevice? {
+/// 현재 발행된 iOS 화면 캡처 장치들 (muxed) — macOS 26에서 DiscoverySession에 미노출되므로
+/// CMIO 저수준 열거 → UID → AVCaptureDevice(uniqueID:) 직접 생성으로 우회
+func muxedCaptureDevices() -> [AVCaptureDevice] {
+    var address = CMIOObjectPropertyAddress(
+        mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyDevices),
+        mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+        mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+    )
+    var dataSize: UInt32 = 0
+    guard CMIOObjectGetPropertyDataSize(CMIOObjectID(kCMIOObjectSystemObject), &address, 0, nil, &dataSize) == 0 else {
+        return []
+    }
+    let count = Int(dataSize) / MemoryLayout<CMIOObjectID>.size
+    var ids = [CMIOObjectID](repeating: 0, count: count)
+    var used: UInt32 = 0
+    guard CMIOObjectGetPropertyData(CMIOObjectID(kCMIOObjectSystemObject), &address, 0, nil, dataSize, &used, &ids) == 0 else {
+        return []
+    }
+
+    var devices: [AVCaptureDevice] = []
+    for objectId in ids {
+        guard let uid = cmioStringProperty(objectId, selector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceUID)) else { continue }
+        guard let device = AVCaptureDevice(uniqueID: uid) else { continue }
+        if device.hasMediaType(.muxed) { devices.append(device) }
+    }
+    return devices
+}
+
+/// iOS 화면 캡처 장치 검색 — 발행에 수십 초 걸릴 수 있어 재시도
+/// name: 다중 기기 구분용 기기 이름 (devicectl의 deviceProperties.name) — 미지정 시 첫 장치
+func findDevice(name: String?, timeoutSeconds: Int) -> AVCaptureDevice? {
     let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
     while Date() < deadline {
-        let discovery = AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.external],
-            mediaType: .muxed,
-            position: .unspecified
-        )
-        let devices = discovery.devices
-        if let udid {
-            // iOS 캡처 장치의 uniqueID는 UDID (하이픈 유무 변형 대비 정규화 비교)
-            let normalized = udid.replacingOccurrences(of: "-", with: "").lowercased()
-            let match = devices.first {
-                $0.uniqueID.replacingOccurrences(of: "-", with: "").lowercased() == normalized
-            }
-            if let match { return match }
+        let devices = muxedCaptureDevices()
+        if let name {
+            if let match = devices.first(where: { $0.localizedName == name }) { return match }
         }
-        if udid == nil && !devices.isEmpty { return devices.first }
-        Thread.sleep(forTimeInterval: 1.0)
+        if name == nil, let first = devices.first { return first }
+        RunLoop.main.run(until: Date().addingTimeInterval(1.0))
     }
     return nil
 }
@@ -154,18 +173,30 @@ func listCmioDevices() {
     log("CMIO 장치 수: \(deviceCount)")
 
     for deviceId in deviceIds {
-        var nameAddress = CMIOObjectPropertyAddress(
-            mSelector: CMIOObjectPropertySelector(kCMIOObjectPropertyName),
-            mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
-            mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
-        )
-        var nameSize: UInt32 = 0
-        guard CMIOObjectGetPropertyDataSize(deviceId, &nameAddress, 0, nil, &nameSize) == 0 else { continue }
-        var name: CFString = "" as CFString
-        var used: UInt32 = 0
-        guard CMIOObjectGetPropertyData(deviceId, &nameAddress, 0, nil, nameSize, &used, &name) == 0 else { continue }
-        print("CMIO #\(deviceId): \(name)")
+        let name = cmioStringProperty(deviceId, selector: CMIOObjectPropertySelector(kCMIOObjectPropertyName)) ?? "?"
+        let uid = cmioStringProperty(deviceId, selector: CMIOObjectPropertySelector(kCMIODevicePropertyDeviceUID)) ?? "?"
+        print("CMIO #\(deviceId): \(name)\tUID=\(uid)")
+
+        // AVFoundation 직접 생성 시도 — DiscoverySession 미노출 장치 우회
+        if let direct = AVCaptureDevice(uniqueID: uid) {
+            print("  → AVCaptureDevice(uniqueID:) 성공: \(direct.localizedName), muxed=\(direct.hasMediaType(.muxed))")
+        }
     }
+}
+
+/// CMIO 문자열 속성 조회
+func cmioStringProperty(_ objectId: CMIOObjectID, selector: CMIOObjectPropertySelector) -> String? {
+    var address = CMIOObjectPropertyAddress(
+        mSelector: selector,
+        mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
+        mElement: CMIOObjectPropertyElement(kCMIOObjectPropertyElementMain)
+    )
+    var size: UInt32 = 0
+    guard CMIOObjectGetPropertyDataSize(objectId, &address, 0, nil, &size) == 0 else { return nil }
+    var value: CFString = "" as CFString
+    var used: UInt32 = 0
+    guard CMIOObjectGetPropertyData(objectId, &address, 0, nil, size, &used, &value) == 0 else { return nil }
+    return value as String
 }
 
 // ── 엔트리 ──────────────────────────────────────────────
@@ -182,16 +213,18 @@ if arguments.contains("--list-cmio") {
     exit(0)
 }
 
-guard let udidIndex = arguments.firstIndex(of: "--udid"), udidIndex + 1 < arguments.count else {
-    log("사용법: mirror-helper --list | --udid <UDID>")
-    exit(2)
+/// --name <기기이름> (다중 기기 구분, devicectl의 name) — 미지정 시 첫 muxed 장치
+func argumentValue(_ flag: String) -> String? {
+    guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+    return arguments[index + 1]
 }
-let udid = arguments[udidIndex + 1]
+
+let deviceName = argumentValue("--name")
 
 enableScreenCaptureDevices()
-log("기기 검색 중: \(udid)")
-guard let device = findDevice(udid: udid, timeoutSeconds: 30) else {
-    log("기기를 캡처 장치로 찾지 못함: \(udid)")
+log("기기 검색 중: \(deviceName ?? "(첫 번째 muxed 장치)")")
+guard let device = findDevice(name: deviceName, timeoutSeconds: 60) else {
+    log("기기를 캡처 장치로 찾지 못함: \(deviceName ?? "?")")
     exit(3)
 }
 log("캡처 장치 발견: \(device.localizedName) (\(device.uniqueID))")

@@ -116,7 +116,7 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.warn('손상된 프레임 무시');
       return;
     }
-    this.streamsRelay.broadcast(frame.deviceId, frame.widthPt, frame.heightPt, frame.jpeg);
+    this.streamsRelay.broadcast(frame);
   }
 
   /** 기기의 Agent에 스트림 시작/중지 지시 (fire-and-forget) */

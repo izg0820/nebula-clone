@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { encodeViewerFrame } from '@nebula/shared';
+import { AgentFrame, encodeViewerFrame } from '@nebula/shared';
 import type { WebSocket } from 'ws';
 
 /** 스트림 시작/중지 지시 수신자 — AgentsGateway가 등록 (모듈 순환 의존 회피) */
@@ -51,11 +51,17 @@ export class StreamsRelayService {
   }
 
   /** Agent 프레임을 해당 기기 시청자 전원에게 전달 */
-  broadcast(deviceId: string, widthPt: number, heightPt: number, jpeg: Uint8Array): void {
-    const sockets = this.viewers.get(deviceId);
+  broadcast(frame: AgentFrame): void {
+    const sockets = this.viewers.get(frame.deviceId);
     if (!sockets) return;
 
-    const payload = encodeViewerFrame({ widthPt, heightPt, jpeg });
+    const payload = encodeViewerFrame({
+      format: frame.format,
+      isKey: frame.isKey,
+      width: frame.width,
+      height: frame.height,
+      payload: frame.payload,
+    });
     for (const socket of sockets) {
       if (socket.readyState !== socket.OPEN) continue;
       socket.send(payload);

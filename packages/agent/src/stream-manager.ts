@@ -1,9 +1,10 @@
-import { AgentFrame } from '@nebula/shared';
+import { AgentFrame, FRAME_FORMAT_JPEG } from '@nebula/shared';
 import { ControllerClient } from './controller-client';
 import { ControllerEndpointResolver } from './controller-registry';
+import { H264Stream } from './h264-stream';
 import { logger } from './logger';
 
-/** 프레임 간 최소 대기 — Controller 과점유 방지 (캡처 자체가 ~150ms라 실효 ~6-10fps) */
+/** JPEG 폴백: 프레임 간 최소 대기 (캡처 자체가 ~150ms라 실효 ~6fps) */
 const FRAME_GAP_MS = 30;
 /** 캡처 실패 시 재시도 대기 */
 const FAILURE_RETRY_MS = 1_000;
@@ -24,48 +25,93 @@ function isScreenshotPayload(value: unknown): value is ScreenshotPayload {
   );
 }
 
+export interface StreamManagerOptions {
+  /** mirror-helper 바이너리 경로 — 지정 시 H.264 모드, 미지정 시 JPEG 폴백 */
+  readonly helperPath: string | null;
+  /** deviceId → 기기 이름 (헬퍼의 --name 인자용, 발견 결과에서 갱신) */
+  readonly resolveDeviceName: (deviceId: string) => string | null;
+}
+
 /**
- * 미러링 스트림 관리 — 서버의 startStream/stopStream 지시에 따라
- * 기기별 연속 캡처 루프를 돌리고 프레임을 터널로 푸시
+ * 미러링 스트림 관리 — 서버의 startStream/stopStream 지시에 따라 기기별 스트림 구동
+ * H.264 모드: mirror-helper(캡처 장치) 프로세스 — ~30-60fps
+ * JPEG 모드: XCUITest 스크린샷 폴링 — ~3-6fps (캡처 장치가 없는 환경 폴백)
  */
 export class StreamManager {
-  /** deviceId → 활성 루프 중단 플래그 */
-  private readonly activeStreams = new Map<string, { isActive: boolean }>();
+  private readonly jpegStreams = new Map<string, { isActive: boolean }>();
+  private readonly h264Streams = new Map<string, H264Stream>();
 
   constructor(
     private readonly resolver: ControllerEndpointResolver,
     private readonly sendFrame: (frame: AgentFrame) => boolean,
+    private readonly options: StreamManagerOptions,
   ) {}
 
   start(deviceId: string): void {
-    if (this.activeStreams.has(deviceId)) return;
-    const handle = { isActive: true };
-    this.activeStreams.set(deviceId, handle);
-    logger.info({ deviceId }, '미러링 스트림 시작');
-    void this.captureLoop(deviceId, handle);
+    if (this.startH264(deviceId)) return;
+    this.startJpeg(deviceId);
   }
 
   stop(deviceId: string): void {
-    const handle = this.activeStreams.get(deviceId);
-    if (!handle) return;
-    handle.isActive = false;
-    this.activeStreams.delete(deviceId);
-    logger.info({ deviceId }, '미러링 스트림 중지');
+    const h264 = this.h264Streams.get(deviceId);
+    if (h264) {
+      h264.stop();
+      this.h264Streams.delete(deviceId);
+      logger.info({ deviceId }, 'H.264 미러링 중지');
+    }
+
+    const jpeg = this.jpegStreams.get(deviceId);
+    if (jpeg) {
+      jpeg.isActive = false;
+      this.jpegStreams.delete(deviceId);
+      logger.info({ deviceId }, 'JPEG 미러링 중지');
+    }
   }
 
   stopAll(): void {
-    for (const deviceId of [...this.activeStreams.keys()]) this.stop(deviceId);
+    for (const deviceId of [...this.h264Streams.keys(), ...this.jpegStreams.keys()]) {
+      this.stop(deviceId);
+    }
   }
 
-  private async captureLoop(deviceId: string, handle: { isActive: boolean }): Promise<void> {
+  /** H.264 모드 시작 — 헬퍼 미설정·기기 이름 미상이면 false (JPEG 폴백) */
+  private startH264(deviceId: string): boolean {
+    if (!this.options.helperPath) return false;
+    if (this.h264Streams.has(deviceId)) return true;
+
+    const deviceName = this.options.resolveDeviceName(deviceId);
+    if (!deviceName) {
+      logger.warn({ deviceId }, '기기 이름 미상 — JPEG 폴백');
+      return false;
+    }
+
+    const stream = new H264Stream(
+      { helperPath: this.options.helperPath, deviceName, deviceId },
+      this.sendFrame,
+    );
+    this.h264Streams.set(deviceId, stream);
+    stream.start();
+    logger.info({ deviceId, deviceName }, 'H.264 미러링 시작');
+    return true;
+  }
+
+  private startJpeg(deviceId: string): void {
+    if (this.jpegStreams.has(deviceId)) return;
+    const handle = { isActive: true };
+    this.jpegStreams.set(deviceId, handle);
+    logger.info({ deviceId }, 'JPEG 미러링 시작 (폴백)');
+    void this.jpegLoop(deviceId, handle);
+  }
+
+  private async jpegLoop(deviceId: string, handle: { isActive: boolean }): Promise<void> {
     while (handle.isActive) {
-      const delay = await this.captureOne(deviceId);
+      const delay = await this.captureJpegOnce(deviceId);
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
-  /** 1프레임 캡처·전송 — 다음 시도까지의 대기 시간 반환 */
-  private async captureOne(deviceId: string): Promise<number> {
+  /** JPEG 1프레임 캡처·전송 — 다음 시도까지의 대기 시간 반환 */
+  private async captureJpegOnce(deviceId: string): Promise<number> {
     const baseUrl = this.resolver.resolve(deviceId);
     if (!baseUrl || !this.resolver.isReady(deviceId)) return FAILURE_RETRY_MS;
 
@@ -74,12 +120,13 @@ export class StreamManager {
     if (!outcome.ok || !isScreenshotPayload(outcome.result)) return FAILURE_RETRY_MS;
 
     const { jpegBase64, widthPt, heightPt } = outcome.result;
-    const jpeg = Uint8Array.from(Buffer.from(jpegBase64, 'base64'));
     const sent = this.sendFrame({
       deviceId,
-      widthPt: Math.round(widthPt),
-      heightPt: Math.round(heightPt),
-      jpeg,
+      format: FRAME_FORMAT_JPEG,
+      isKey: true,
+      width: Math.round(widthPt),
+      height: Math.round(heightPt),
+      payload: Uint8Array.from(Buffer.from(jpegBase64, 'base64')),
     });
     if (!sent) return FAILURE_RETRY_MS;
     return FRAME_GAP_MS;

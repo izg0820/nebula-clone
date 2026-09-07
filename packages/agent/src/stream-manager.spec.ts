@@ -38,10 +38,14 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
 
   test('start → 프레임 연속 푸시, stop → 루프 종료', async () => {
     const frames: AgentFrame[] = [];
-    const manager = new StreamManager(new StaticControllerRegistry(new Map([['u1', port]])), (frame) => {
-      frames.push(frame);
-      return true;
-    });
+    const manager = new StreamManager(
+      new StaticControllerRegistry(new Map([['u1', port]])),
+      (frame) => {
+        frames.push(frame);
+        return true;
+      },
+      { helperPath: null, resolveDeviceName: () => null },
+    );
 
     manager.start('u1');
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -52,12 +56,16 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
     // 여러 프레임이 순차 푸시됐고, stop 이후엔 최대 in-flight 1개만 추가될 수 있음
     expect(countAtStop).toBeGreaterThanOrEqual(2);
     expect(frames.length).toBeLessThanOrEqual(countAtStop + 1);
-    expect(frames[0]).toMatchObject({ deviceId: 'u1', widthPt: 430, heightPt: 932 });
-    expect(Array.from(frames[0].jpeg)).toEqual(JPEG_BYTES);
+    expect(frames[0]).toMatchObject({ deviceId: 'u1', width: 430, height: 932, isKey: true });
+    expect(Array.from(frames[0].payload)).toEqual(JPEG_BYTES);
   });
 
   test('중복 start는 루프를 늘리지 않음', async () => {
-    const manager = new StreamManager(new StaticControllerRegistry(new Map([['u1', port]])), () => true);
+    const manager = new StreamManager(
+      new StaticControllerRegistry(new Map([['u1', port]])),
+      () => true,
+      { helperPath: null, resolveDeviceName: () => null },
+    );
 
     manager.start('u1');
     manager.start('u1');
@@ -71,10 +79,14 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
 
   test('Controller 미등록 기기는 재시도 대기로만 돌고 프레임 없음', async () => {
     const frames: AgentFrame[] = [];
-    const manager = new StreamManager(new StaticControllerRegistry(new Map()), (frame) => {
-      frames.push(frame);
-      return true;
-    });
+    const manager = new StreamManager(
+      new StaticControllerRegistry(new Map()),
+      (frame) => {
+        frames.push(frame);
+        return true;
+      },
+      { helperPath: null, resolveDeviceName: () => null },
+    );
 
     manager.start('unknown');
     await new Promise((resolve) => setTimeout(resolve, 150));

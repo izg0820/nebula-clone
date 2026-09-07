@@ -97,11 +97,14 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
   미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
 - **알려진 이슈**: 점유 TTL 없음 — 점유자(occupantId 분실) 사라지면 기기가 잠김, 러너 재기동과
   무관하게 유지됨. Phase 4 점유 만료 처리로 해결 예정 (실사용에서 실제로 겪음)
-- **Phase 3 완료 (푸시 스트리밍)**: 시청자 WS `/stream?deviceId&token` → StreamsRelay가
-  시청자 0↔1 전환 시 Agent에 start/stopStream 지시 → Agent StreamManager가 연속 캡처,
-  바이너리 프레임([frame-codec])을 터널로 푸시. 실측 3.5fps/169KB (XCUIScreen 캡처가 병목).
-  **macOS 26 중요 발견**: 원문의 캡처 장치(DAL) 방식은 QuickTime조차 불가 — OS에서 제거됨.
-  mirror-helper/ 에 시도 코드·근거 보존 (구버전 macOS 호스트에서 재시도 가치 있음)
+- **Phase 3 완료 (H.264 미러링, 원문 방식)**: 실측 **40fps/8KB/frame**. 파이프라인:
+  mirror-helper(캡처 장치→VideoToolbox H.264) → Agent H264Stream(stdout 패킷 파싱) →
+  터널 바이너리 프레임 → StreamsRelay → 브라우저 WebCodecs. 시청자 0↔1 전환에 자동
+  시작/중지, 헬퍼 미설정이면 JPEG 폴백(3.5fps). **macOS 26 함정 (실측)**: ① iOS 캡처 장치가
+  DiscoverySession에 안 보임 → CMIO 열거로 UID 얻어 `AVCaptureDevice(uniqueID:)` 직접 열기
+  ② 최초 발행이 QuickTime 소스 열람으로 트리거됨 — 발행 후엔 QuickTime 종료해도 유지되나
+  **콜드 스타트(재연결·재부팅) 자가 발행 미검증** (안 되면 QuickTime 활성화 킥 필요, 백로그).
+  탭 좌표는 pt 기준이라 웹이 점유 직후 스크린샷 1회로 pt 크기 확보 후 비율 환산
 - **실기기 연결 참고**: devicectl·usbmuxd·XCUITest는 Wi-Fi로도 동작 (실제로 무선으로 전 파이프라인
   동작 확인됨). 단 미러링 캡처 장치는 USB 필수였음
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,

@@ -301,13 +301,17 @@ describe('AgentsGateway', () => {
 
     const frame = encodeAgentFrame({
       deviceId: 'udid-1',
-      widthPt: 430,
-      heightPt: 932,
-      jpeg: new Uint8Array([0xff, 0xd8]),
+      format: 1,
+      isKey: true,
+      width: 430,
+      height: 932,
+      payload: new Uint8Array([0xff, 0xd8]),
     });
     socket.emit('message', Buffer.from(frame), true);
 
-    expect(relay.broadcast).toHaveBeenCalledWith('udid-1', 430, 932, expect.any(Uint8Array));
+    expect(relay.broadcast).toHaveBeenCalledWith(
+      expect.objectContaining({ deviceId: 'udid-1', width: 430, height: 932 }),
+    );
   });
 
   test('시청자 있는 기기는 register 시 스트림 재개 지시', () => {
