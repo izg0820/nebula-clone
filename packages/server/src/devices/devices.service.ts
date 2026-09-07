@@ -68,7 +68,7 @@ export class DevicesService {
     this.repository.heartbeat(deviceIds, agentId, new Date().toISOString());
   }
 
-  /** Agent 연결 종료 — 소속 기기 오프라인 + 점유 해제 */
+  /** Agent 연결 종료 — 소속 기기 오프라인 (점유는 하트비트 만료까지 유예) */
   handleAgentDisconnect(agentId: string): void {
     this.repository.markAgentOffline(agentId);
   }

@@ -81,7 +81,7 @@ describe('StreamsRelayService', () => {
       height: 1398,
       stampMs: 0,
       payload: new Uint8Array([0x01]),
-    };
+    } as const;
     relay.broadcast({ ...frame, isKey: false });
     expect(congested.sent).toHaveLength(0);
 

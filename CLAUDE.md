@@ -62,7 +62,9 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
 - **도메인 vs 공개 타입 분리**: `Device`(내부, `occupantId` 포함) ↔ `PublicDevice`(응답용).
   `occupantId`는 해제 권한 비밀값 — **점유 응답 외 어떤 API 응답에도 노출 금지**
 - **점유 모델**: `tryOccupy`는 SQLite 트랜잭션으로 원자적 (better-sqlite3 동기 + 단일 스레드 전제).
-  오프라인 전환(`markAgentOffline`/`markStaleOffline`)은 반드시 점유도 함께 해제
+  Agent 단선(`markAgentOffline`)은 점유를 **유지**(터널 블립 유예), 점유 해제는 하트비트 만료
+  스윕(`markStaleOffline`)에서만 — offline+점유 잔존 기기도 스윕이 회수 (영구 점유 방지)
+- **스트림 인가**: `/stream` 시청은 점유자 전용 — `occupantId` 쿼리 검증 (불일치 4403)
 - **WS 게이트웨이**: 연결 시 `NEBULA_AGENT_TOKEN` 검증(실패 4401), agentId 형식 `[A-Za-z0-9_-]{1,64}`(위반 4400),
   중복 agentId는 기존 소켓 4409 대체. disconnect 처리 전 "현행 소켓인지" 확인 필수
 - **저장소 접근은 `DevicesRepository` 인터페이스로만** — Redis 등 교체 대비. 구현체 직접 주입 금지

@@ -364,6 +364,52 @@ describe('AgentsGateway', () => {
     );
   });
 
+  test('대체된(superseded) 옛 소켓의 메시지는 무시 — 레지스트리·명령 상태 변조 방지', () => {
+    const { gateway, service } = createGateway();
+    const oldSocket = new FakeSocket();
+    gateway.handleConnection(
+      oldSocket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+    const newSocket = new FakeSocket();
+    gateway.handleConnection(
+      newSocket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+    expect(oldSocket.closedWith?.code).toBe(4409);
+
+    // 옛 소켓이 close를 무시하고 계속 보내는 heartbeat — 무시돼야 함
+    oldSocket.emit('message', JSON.stringify({ type: 'heartbeat', deviceIds: ['udid-1'] }), false);
+    expect(service.recordHeartbeat).not.toHaveBeenCalled();
+
+    // 현행 소켓의 heartbeat은 정상 처리
+    newSocket.emit('message', JSON.stringify({ type: 'heartbeat', deviceIds: ['udid-1'] }), false);
+    expect(service.recordHeartbeat).toHaveBeenCalledWith(['udid-1'], 'agent-1');
+  });
+
+  test('소유하지 않은 기기의 프레임은 릴레이하지 않음 (화면 위조 방지)', () => {
+    const { gateway, relay, service } = createGateway();
+    service.getById.mockReturnValue({ agentId: '다른-agent' });
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const frame = encodeAgentFrame({
+      deviceId: 'udid-1',
+      format: 2,
+      isKey: true,
+      width: 430,
+      height: 932,
+      stampMs: 0,
+      payload: new Uint8Array([0x01]),
+    });
+    socket.emit('message', Buffer.from(frame), true);
+
+    expect(relay.broadcast).not.toHaveBeenCalled();
+  });
+
   test('인증 실패한 소켓의 disconnect는 아무것도 하지 않음', () => {
     const { gateway, service } = createGateway();
     const socket = new FakeSocket();

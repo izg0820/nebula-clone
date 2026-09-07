@@ -156,11 +156,12 @@ export class SqliteDevicesRepository implements DevicesRepository {
   }
 
   markAgentOffline(agentId: string): void {
-    // 오프라인 전환 시 점유도 해제 — 세션이 죽은 기기가 영구 점유로 남는 것 방지
+    // 점유는 유지 — 터널이 수 초 끊겼다 재연결되는 블립에 사용자 세션이 강제 종료되지 않게.
+    // 점유 해제는 하트비트 만료 스윕(markStaleOffline)에서만 (유예 = HEARTBEAT_TIMEOUT_MS)
     this.db
       .prepare(
         `UPDATE devices
-         SET status = 'offline', agent_id = NULL, occupant_id = NULL, occupied_at = NULL
+         SET status = 'offline', agent_id = NULL
          WHERE agent_id = ?`,
       )
       .run(agentId);
@@ -168,10 +169,13 @@ export class SqliteDevicesRepository implements DevicesRepository {
 
   markStaleOffline(cutoffIso: string): string[] {
     const stale = this.db.transaction((): string[] => {
+      // offline이지만 점유가 남은 기기도 포함 — markAgentOffline이 점유를 유지하므로
+      // 여기서 회수하지 않으면 Agent 미복귀 시 영구 점유가 됨
       const rows = this.db
         .prepare(
           `SELECT id FROM devices
-           WHERE status = 'online' AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?)`,
+           WHERE (status = 'online' OR occupant_id IS NOT NULL)
+             AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?)`,
         )
         .all(cutoffIso) as Array<{ id: string }>;
       if (rows.length === 0) return [];

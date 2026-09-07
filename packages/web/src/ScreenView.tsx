@@ -17,13 +17,20 @@ interface ScreenViewProps {
 }
 
 /** http(s) → ws(s) 스킴 변환 — 파싱 실패는 null (설정 입력 중 잘못된 URL로 앱이 죽지 않게) */
-function toStreamUrl(serverUrl: string, deviceId: string, token: string): string | null {
+export function toStreamUrl(
+  serverUrl: string,
+  deviceId: string,
+  token: string,
+  occupantId: string,
+): string | null {
   try {
     const url = new URL(serverUrl);
     url.protocol = toWsProtocol(url.protocol);
     url.pathname = '/stream';
     url.searchParams.set('deviceId', deviceId);
     url.searchParams.set('token', token);
+    // 화면 관람도 점유자 전용 (서버가 4403으로 거부)
+    url.searchParams.set('occupantId', occupantId);
     return url.toString();
   } catch {
     return null;
@@ -37,6 +44,16 @@ function toWsProtocol(httpProtocol: string): string {
 
 /** 디코드 큐가 이 이상 밀리면 과부하 — 키프레임부터 재동기화. 5개 ≈ 지연 상한 ~170ms */
 const MAX_DECODE_QUEUE = 5;
+
+/** 재시도해도 소용없는 스트림 종료 코드 → 사용자 안내 (그 외 코드는 백오프 재연결) */
+const STREAM_TERMINAL_CLOSE_MESSAGES: Record<number, string> = {
+  4400: '스트림 요청 형식 오류 (deviceId/occupantId 누락)',
+  4401: '스트림 인증 실패 — 토큰 확인',
+  4403: '점유자가 아니어서 화면을 볼 수 없습니다 — 기기를 다시 점유하세요',
+  4429: '연결 시도 과다 — 잠시 후 다시 시도하세요',
+};
+const STREAM_RECONNECT_BASE_MS = 1_000;
+const STREAM_RECONNECT_MAX_MS = 15_000;
 
 /** 디코드 연속 실패가 이 횟수에 달하면 사용자에게 표면화 (일시 오류는 키프레임 재동기화로 조용히 복구) */
 const DECODE_FAILURE_REPORT_THRESHOLD = 3;
@@ -207,7 +224,7 @@ export function ScreenView({
       onError('이 브라우저는 WebCodecs를 지원하지 않아 미러링을 표시할 수 없습니다');
       return;
     }
-    const streamUrl = toStreamUrl(serverUrl, deviceId, token);
+    const streamUrl = toStreamUrl(serverUrl, deviceId, token, occupantId);
     if (!streamUrl) {
       onError('서버 주소 형식 오류 — 스트림 연결 불가');
       return;
@@ -215,8 +232,9 @@ export function ScreenView({
 
     let isActive = true;
     let player: H264Player | null = null;
-    const socket = new WebSocket(streamUrl);
-    socket.binaryType = 'arraybuffer';
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectAttempt = 0;
 
     const createPlayer = (canvas: HTMLCanvasElement): H264Player =>
       new H264Player(
@@ -231,25 +249,49 @@ export function ScreenView({
         },
       );
 
-    socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    const connect = (): void => {
       if (!isActive) return;
-      const frame = decodeViewerFrame(new Uint8Array(event.data));
-      if (!frame) return;
+      socket = new WebSocket(streamUrl);
+      socket.binaryType = 'arraybuffer';
 
-      if (!player && canvasRef.current) player = createPlayer(canvasRef.current);
-      player?.push(frame.payload, frame.isKey, frame.width, frame.height);
+      socket.onopen = () => {
+        reconnectAttempt = 0;
+      };
+      socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+        if (!isActive) return;
+        const frame = decodeViewerFrame(new Uint8Array(event.data));
+        if (!frame) return;
+
+        if (!player && canvasRef.current) player = createPlayer(canvasRef.current);
+        player?.push(frame.payload, frame.isKey, frame.width, frame.height);
+      };
+      socket.onclose = (event) => {
+        if (!isActive) return;
+        // 굳은 마지막 프레임을 실시간 화면으로 오인하지 않게 즉시 연결 중 표시로 전환
+        setHasFrame(false);
+        const terminalMessage = STREAM_TERMINAL_CLOSE_MESSAGES[event.code];
+        if (terminalMessage) {
+          onError(terminalMessage);
+          return;
+        }
+        // 서버 재기동·일시 단선은 백오프 재연결 (Agent 터널과 대칭)
+        const delay = Math.min(
+          STREAM_RECONNECT_BASE_MS * 2 ** reconnectAttempt,
+          STREAM_RECONNECT_MAX_MS,
+        );
+        reconnectAttempt += 1;
+        reconnectTimer = window.setTimeout(connect, delay);
+      };
     };
-    socket.onclose = (event) => {
-      if (!isActive) return;
-      if (event.code === 4401) onError('스트림 인증 실패 — 토큰 확인');
-    };
+    connect();
 
     return () => {
       isActive = false;
-      socket.close();
+      if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+      socket?.close();
       player?.close();
     };
-  }, [serverUrl, token, deviceId, onError]);
+  }, [serverUrl, token, deviceId, occupantId, onError]);
 
   /** 드래그 시작점 (클릭=탭 / 드래그=스와이프 판별용) — pointerId로 캡처한 포인터만 추적 */
   const pointerStartRef = useRef<{ x: number; y: number; time: number; pointerId: number } | null>(

@@ -19,6 +19,7 @@ import {
 import type { IncomingMessage } from 'http';
 import { randomUUID } from 'crypto';
 import type { WebSocket } from 'ws';
+import { ConnectionRateLimiter } from '../auth/connection-rate-limiter';
 import { extractBearerToken, isTokenEqual } from '../auth/token.guard';
 import {
   AGENT_WS_MAX_PAYLOAD_BYTES,
@@ -74,6 +75,8 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly pendingCommands = new Map<string, PendingCommand>();
   /** agentId → 교환된 지원 액션 스펙 (미교환 구버전은 LEGACY_ACTION_KINDS 적용) */
   private readonly agentCapabilities = new Map<string, ReadonlySet<string>>();
+  /** WS 핸드셰이크 인증 실패 rate limit — HTTP Throttler가 못 보는 경로 */
+  private readonly rateLimiter = new ConnectionRateLimiter();
 
   constructor(
     private readonly config: ConfigService,
@@ -82,8 +85,14 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   handleConnection(client: AgentSocket, request: IncomingMessage): void {
+    const remoteIp = request.socket?.remoteAddress;
+    if (this.rateLimiter.isBlocked(remoteIp)) {
+      client.close(4429, 'rate limited');
+      return;
+    }
     if (!this.isAuthorized(request)) {
-      this.logger.warn('Agent 인증 실패 — 연결 종료');
+      this.rateLimiter.recordFailure(remoteIp);
+      this.logger.warn(`Agent 인증 실패 — 연결 종료 (ip=${remoteIp ?? '?'})`);
       client.close(4401, 'unauthorized');
       return;
     }
@@ -109,22 +118,38 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`Agent 연결: ${agentId}`);
 
     client.on('message', (data: Buffer | string, isBinary: boolean) => {
+      // 대체된(superseded) 옛 소켓의 늦은 메시지가 레지스트리·명령 상태를 변조하지 못하게
+      // — close(4409)를 무시하는 half-open 피어는 수십 초 더 살아 있을 수 있음
+      if (this.agentSockets.get(agentId) !== client) return;
       if (isBinary) {
-        this.handleFrame(data as Buffer);
+        this.handleFrame(agentId, data as Buffer);
         return;
       }
       this.handleMessage(agentId, data.toString());
     });
   }
 
-  /** Agent가 푸시한 미러링 프레임 → 시청자 릴레이 */
-  private handleFrame(data: Buffer): void {
+  /** Agent가 푸시한 미러링 프레임 → 소유 기기 확인 후 시청자 릴레이 */
+  private handleFrame(agentId: string, data: Buffer): void {
     const frame = decodeAgentFrame(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
     if (!frame) {
       this.logger.warn('손상된 프레임 무시');
       return;
     }
+    // 프레임의 deviceId는 자기주장 값 — 발신 Agent 소유 기기가 아니면 위조 화면이므로 폐기
+    if (!this.ownsDevice(agentId, frame.deviceId)) {
+      this.logger.warn(`소유하지 않은 기기 프레임 무시 (agent=${agentId}, device=${frame.deviceId})`);
+      return;
+    }
     this.streamsRelay.broadcast(frame);
+  }
+
+  private ownsDevice(agentId: string, deviceId: string): boolean {
+    try {
+      return this.devicesService.getById(deviceId).agentId === agentId;
+    } catch {
+      return false;
+    }
   }
 
   handleDisconnect(client: AgentSocket): void {

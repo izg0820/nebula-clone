@@ -12,6 +12,8 @@
  * (format 바이트는 프로토콜 진화 대비 유지 — 현재 H.264 단일)
  */
 
+import { isDeviceId } from './parsers';
+
 export const FRAME_FORMAT_H264 = 2;
 export type FrameFormat = typeof FRAME_FORMAT_H264;
 
@@ -43,13 +45,21 @@ function isFrameFormat(value: number): value is FrameFormat {
   return value === FRAME_FORMAT_H264;
 }
 
+/** 치수는 양의 정수만 — 0·음수·소수는 u16 기록 시 왜곡되고 디코더 configure가 throw함 */
+function isValidDimension(value: number): boolean {
+  return Number.isInteger(value) && value > 0 && value <= MAX_DIMENSION;
+}
+
 export function encodeAgentFrame(frame: AgentFrame): Uint8Array {
   const idBytes = new TextEncoder().encode(frame.deviceId);
   if (idBytes.length === 0 || idBytes.length > MAX_DEVICE_ID_BYTES) {
     throw new Error(`deviceId 길이 초과: ${idBytes.length}`);
   }
-  if (frame.width > MAX_DIMENSION || frame.height > MAX_DIMENSION) {
-    throw new Error('프레임 크기 범위 초과');
+  if (!isValidDimension(frame.width) || !isValidDimension(frame.height)) {
+    throw new Error('프레임 크기 범위 초과 또는 비정수');
+  }
+  if (!Number.isFinite(frame.stampMs)) {
+    throw new Error('stampMs 비유한값');
   }
 
   const out = new Uint8Array(1 + idBytes.length + 10 + frame.payload.length);
@@ -75,22 +85,30 @@ export function decodeAgentFrame(data: Uint8Array): AgentFrame | null {
   if (idLength === 0 || data.length < 1 + idLength + 10 + 1) return null;
 
   const deviceId = new TextDecoder().decode(data.subarray(1, 1 + idLength));
-  const view = new DataView(data.buffer, data.byteOffset);
+  if (!isDeviceId(deviceId)) return null;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const format = data[1 + idLength];
   if (!isFrameFormat(format)) return null;
+
+  const width = view.getUint16(3 + idLength);
+  const height = view.getUint16(5 + idLength);
+  if (!isValidDimension(width) || !isValidDimension(height)) return null;
 
   return {
     deviceId,
     format,
     isKey: data[2 + idLength] === 1,
-    width: view.getUint16(3 + idLength),
-    height: view.getUint16(5 + idLength),
+    width,
+    height,
     stampMs: view.getUint32(7 + idLength),
     payload: data.subarray(11 + idLength),
   };
 }
 
 export function encodeViewerFrame(frame: ViewerFrame): Uint8Array {
+  if (!isValidDimension(frame.width) || !isValidDimension(frame.height)) {
+    throw new Error('프레임 크기 범위 초과 또는 비정수');
+  }
   const out = new Uint8Array(10 + frame.payload.length);
   const view = new DataView(out.buffer);
   out[0] = frame.format;
@@ -108,12 +126,16 @@ export function decodeViewerFrame(data: Uint8Array): ViewerFrame | null {
   const format = data[0];
   if (!isFrameFormat(format)) return null;
 
-  const view = new DataView(data.buffer, data.byteOffset);
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const width = view.getUint16(2);
+  const height = view.getUint16(4);
+  if (!isValidDimension(width) || !isValidDimension(height)) return null;
+
   return {
     format,
     isKey: data[1] === 1,
-    width: view.getUint16(2),
-    height: view.getUint16(4),
+    width,
+    height,
     stampMs: view.getUint32(6),
     payload: data.subarray(10),
   };

@@ -17,11 +17,18 @@ function parseJson(raw: string): Record<string, unknown> | null {
   }
 }
 
+/** deviceId(UDID) 허용 형식 — URL 경로 삽입·로그 인젝션 방지 (경로 구분자·제어문자 배제) */
+const DEVICE_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+export function isDeviceId(value: unknown): value is string {
+  return typeof value === 'string' && DEVICE_ID_PATTERN.test(value);
+}
+
 function isRegisterDevice(value: unknown): value is RegisterDeviceInput {
   const record = asRecord(value);
   if (!record) return false;
   return (
-    typeof record.id === 'string' &&
+    isDeviceId(record.id) &&
     typeof record.name === 'string' &&
     record.platform === 'ios' &&
     typeof record.osVersion === 'string' &&
@@ -114,8 +121,8 @@ export function parseServerMessage(raw: string): ServerMessage | null {
 
   if (
     message.type === 'command' &&
-    typeof message.requestId === 'string' &&
-    typeof message.deviceId === 'string' &&
+    isRequestId(message.requestId) &&
+    isDeviceId(message.deviceId) &&
     isDeviceAction(message.action)
   ) {
     return {

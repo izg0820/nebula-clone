@@ -21,6 +21,9 @@ export interface ScreenshotResult {
   readonly heightPt: number;
 }
 
+/** API 요청 상한 — 서버 명령 프록시 타임아웃(15초)보다 길게 */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 /** unknown 오류 → 사용자 표시용 메시지 */
 export function toErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -52,15 +55,15 @@ export class ApiClient {
   }
 
   release(deviceId: string, occupantId: string): Promise<PublicDevice> {
-    return this.request('POST', `/devices/${deviceId}/release`, { occupantId });
+    return this.request('POST', `/devices/${encodeURIComponent(deviceId)}/release`, { occupantId });
   }
 
   async tap(deviceId: string, occupantId: string, x: number, y: number): Promise<void> {
-    await this.request('POST', `/devices/${deviceId}/actions/tap`, { occupantId, x, y });
+    await this.request('POST', `/devices/${encodeURIComponent(deviceId)}/actions/tap`, { occupantId, x, y });
   }
 
   async typeText(deviceId: string, occupantId: string, text: string): Promise<void> {
-    await this.request('POST', `/devices/${deviceId}/actions/type`, { occupantId, text });
+    await this.request('POST', `/devices/${encodeURIComponent(deviceId)}/actions/type`, { occupantId, text });
   }
 
   async swipe(
@@ -72,7 +75,7 @@ export class ApiClient {
     toY: number,
     durationMs: number,
   ): Promise<void> {
-    await this.request('POST', `/devices/${deviceId}/actions/swipe`, {
+    await this.request('POST', `/devices/${encodeURIComponent(deviceId)}/actions/swipe`, {
       occupantId,
       fromX,
       fromY,
@@ -83,13 +86,13 @@ export class ApiClient {
   }
 
   async pressButton(deviceId: string, occupantId: string, button: 'home'): Promise<void> {
-    await this.request('POST', `/devices/${deviceId}/actions/press`, { occupantId, button });
+    await this.request('POST', `/devices/${encodeURIComponent(deviceId)}/actions/press`, { occupantId, button });
   }
 
   async screenshot(deviceId: string, occupantId: string): Promise<ScreenshotResult> {
     const response = await this.request<{ result: ScreenshotResult }>(
       'POST',
-      `/devices/${deviceId}/actions/screenshot`,
+      `/devices/${encodeURIComponent(deviceId)}/actions/screenshot`,
       { occupantId },
     );
     return response.result;
@@ -103,6 +106,8 @@ export class ApiClient {
         ...(body !== undefined && { 'content-type': 'application/json' }),
       },
       ...(body !== undefined && { body: JSON.stringify(body) }),
+      // 응답 없는 서버(TCP 블랙홀)에 폴링·액션 요청이 무한 적체되지 않게
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => '');

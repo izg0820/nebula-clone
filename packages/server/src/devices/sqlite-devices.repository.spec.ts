@@ -128,17 +128,18 @@ describe('SqliteDevicesRepository', () => {
     expect(repository.findById(iphone.id)?.status).toBe('offline');
   });
 
-  test('markAgentOffline은 점유도 함께 해제 (영구 점유 방지)', () => {
+  test('markAgentOffline은 점유를 유지 (터널 블립 유예) — 재연결 시 세션 이어짐', () => {
     repository.upsertMany([iphone], AGENT_ID, NOW);
     repository.tryOccupy({}, 'occupant-1', NOW);
 
     repository.markAgentOffline(AGENT_ID);
-    // Agent 복귀 시나리오 — 재등록 후 다시 점유 가능해야 함
-    repository.upsertMany([iphone], AGENT_ID, NOW);
+    expect(repository.findById(iphone.id)?.status).toBe('offline');
+    expect(repository.findById(iphone.id)?.occupantId).toBe('occupant-1');
 
-    const device = repository.findById(iphone.id);
-    expect(device?.occupantId).toBeNull();
-    expect(repository.tryOccupy({}, 'occupant-2', NOW)).not.toBeNull();
+    // Agent 복귀 — 점유가 그대로 살아 있어야 함
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    expect(repository.findById(iphone.id)?.occupantId).toBe('occupant-1');
+    expect(repository.tryOccupy({}, 'occupant-2', NOW)).toBeNull();
   });
 
   test('markStaleOffline도 점유를 함께 해제', () => {
@@ -148,6 +149,18 @@ describe('SqliteDevicesRepository', () => {
 
     repository.markStaleOffline(CUTOFF_AFTER_NOW);
 
+    expect(repository.findById(iphone.id)?.occupantId).toBeNull();
+  });
+
+  test('markStaleOffline은 offline+점유 잔존 기기도 회수 (Agent 미복귀 영구 점유 방지)', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    repository.markAgentOffline(AGENT_ID);
+    const CUTOFF_AFTER_NOW = '2026-09-04T00:02:00.000Z';
+
+    const staleIds = repository.markStaleOffline(CUTOFF_AFTER_NOW);
+
+    expect(staleIds).toEqual([iphone.id]);
     expect(repository.findById(iphone.id)?.occupantId).toBeNull();
   });
 
