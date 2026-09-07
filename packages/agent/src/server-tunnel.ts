@@ -25,10 +25,12 @@ const STABLE_RESET_MS = 30_000;
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
 
-/** 재시도로 복구 불가능한 서버 close 코드 (설정 오류) */
+/** 재시도로 복구 불가능한 서버 close 코드 (설정·운영 오류) */
 const TERMINAL_CLOSE_CODES: Record<number, string> = {
   4400: 'agentId 형식 위반',
   4401: '토큰 인증 실패',
+  // 즉시 재연결하면 두 인스턴스가 서로를 1초 간격으로 축출하는 핑퐁이 됨 — 상한 간격으로만 재시도
+  4409: '중복 agentId — 다른 Agent 인스턴스가 같은 ID로 접속함',
 };
 
 /** n번째 재시도의 대기 시간 (지수 백오프 + 상한) */

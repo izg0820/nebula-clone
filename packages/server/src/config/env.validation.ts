@@ -21,6 +21,14 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     return problem ? `${key}: ${problem}` : null;
   }).filter((problem): problem is string => problem !== null);
 
+  // 두 토큰이 같으면 클라이언트(읽기) 토큰으로 Agent 터널 접속이 가능해짐 — 권한 분리 붕괴
+  if (
+    problems.length === 0 &&
+    config.NEBULA_CLIENT_TOKEN === config.NEBULA_AGENT_TOKEN
+  ) {
+    problems.push('NEBULA_CLIENT_TOKEN과 NEBULA_AGENT_TOKEN은 서로 다른 값이어야 함');
+  }
+
   if (problems.length > 0) {
     throw new Error(
       `환경 변수 검증 실패 — ${problems.join(' / ')} ` +

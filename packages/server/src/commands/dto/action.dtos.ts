@@ -14,7 +14,8 @@ import {
 /** 좌표 상한 — 비정상 값 조기 차단 (현행 기기 해상도 여유 포함) */
 const MAX_COORDINATE = 10_000;
 const MAX_TEXT_LENGTH = 4_000;
-const MAX_SWIPE_DURATION_MS = 10_000;
+/** Agent→Controller HTTP 타임아웃(10초)보다 확실히 낮게 — 상한 스와이프가 항상 타임아웃되는 것 방지 */
+const MAX_SWIPE_DURATION_MS = 5_000;
 
 /** 모든 명령 공통 — 점유 시 발급된 occupantId 필요 */
 export class CommandBaseDto {

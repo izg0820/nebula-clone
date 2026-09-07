@@ -91,6 +91,10 @@ export function App() {
     [api],
   );
 
+  // 안정 identity 필수 — 인라인 함수면 5초 폴링 리렌더마다 ScreenView의 effect가 재실행되어
+  // 점유 기기에 스크린샷 명령이 주기적으로 재발행됨 (러너 메인 스레드 점유 → 헬스 오탐)
+  const handleOccupationLost = useCallback(() => setOccupation(null), []);
+
   const handleRelease = useCallback(() => {
     if (!occupation) return;
     api
@@ -140,6 +144,7 @@ export function App() {
         <main className="main">
           {occupation && (
             <ScreenView
+              key={occupation.deviceId}
               api={api}
               serverUrl={serverUrl}
               token={token}
@@ -147,7 +152,7 @@ export function App() {
               deviceName={occupiedDevice?.name ?? occupation.deviceId}
               occupantId={occupation.occupantId}
               onError={setStatus}
-              onOccupationLost={() => setOccupation(null)}
+              onOccupationLost={handleOccupationLost}
               onRelease={handleRelease}
             />
           )}
