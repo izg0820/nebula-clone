@@ -12,6 +12,7 @@ final class ControllerTests: XCTestCase {
     private static let maxTextLength = 4_000
 
     func testRunControllerServer() throws {
+        disableQuiescenceWaits()
         let actions = ActionHandler()
         let environment = ProcessInfo.processInfo.environment
         let port = environment["NEBULA_CONTROLLER_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
@@ -82,6 +83,13 @@ final class ControllerTests: XCTestCase {
         if path == "/ui" {
             let bundleId = body["bundleId"] as? String
             return HttpResponse(status: 200, body: ["ok": true, "tree": actions.uiDump(bundleId: bundleId)])
+        }
+        if path == "/press" {
+            guard let button = body["button"] as? String, button == "home" else {
+                return badRequest("button은 'home'만 지원")
+            }
+            actions.pressHome()
+            return HttpResponse(status: 200, body: ["ok": true])
         }
         if path == "/screenshot" {
             guard let result = actions.screenshot() else {

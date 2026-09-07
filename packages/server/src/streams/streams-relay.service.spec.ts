@@ -72,6 +72,7 @@ describe('StreamsRelayService', () => {
       isKey: true,
       width: 430,
       height: 932,
+      stampMs: 1000,
       payload: new Uint8Array([0xff, 0xd8]),
     });
 

@@ -1,7 +1,7 @@
 import { Body, Controller, Param, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { CommandsService } from './commands.service';
-import { SwipeDto, TapDto, TypeTextDto, UiDumpDto } from './dto/action.dtos';
+import { PressButtonDto, SwipeDto, TapDto, TypeTextDto, UiDumpDto } from './dto/action.dtos';
 
 /** 스와이프 기본 시간 (ms) */
 const DEFAULT_SWIPE_DURATION_MS = 300;
@@ -58,6 +58,19 @@ export class CommandsController {
   async uiDump(@Param('id') deviceId: string, @Body() dto: UiDumpDto): Promise<CommandResponse> {
     const result = await this.commandsService.execute(deviceId, dto.occupantId, {
       kind: 'uiDump',
+    });
+    return { result };
+  }
+
+  @ApiOperation({ summary: '하드웨어 버튼 (home)' })
+  @Post('press')
+  async press(
+    @Param('id') deviceId: string,
+    @Body() dto: PressButtonDto,
+  ): Promise<CommandResponse> {
+    const result = await this.commandsService.execute(deviceId, dto.occupantId, {
+      kind: 'pressButton',
+      button: dto.button,
     });
     return { result };
   }

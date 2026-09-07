@@ -283,6 +283,59 @@ describe('AgentsGateway', () => {
     }
   });
 
+  test('스펙 미교환(구버전) Agent에 pressButton은 전송 없이 즉시 거부', async () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+    // 스펙(capabilities) 없는 구버전 register
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'register',
+        devices: [{ id: 'u1', name: 'n', platform: 'ios', osVersion: '17', tags: [] }],
+      }),
+    );
+
+    const outcome = await gateway.sendCommand('agent-1', 'u1', {
+      kind: 'pressButton',
+      button: 'home',
+    });
+
+    expect(outcome).toEqual({ ok: false, error: 'unsupported_action' });
+    // command 메시지가 터널로 나가지 않았어야 함 (타임아웃 방지가 목적)
+    const commandMessages = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'command');
+    expect(commandMessages).toHaveLength(0);
+  });
+
+  test('스펙 교환한 Agent에는 pressButton 전송', () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'register',
+        devices: [{ id: 'u1', name: 'n', platform: 'ios', osVersion: '17', tags: [] }],
+        capabilities: ['tap', 'pressButton'],
+      }),
+    );
+
+    void gateway.sendCommand('agent-1', 'u1', { kind: 'pressButton', button: 'home' });
+
+    const commandMessages = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'command');
+    expect(commandMessages).toHaveLength(1);
+  });
+
   test('sendCommand는 터널 미연결이면 즉시 거부', async () => {
     const { gateway } = createGateway();
 
@@ -305,6 +358,7 @@ describe('AgentsGateway', () => {
       isKey: true,
       width: 430,
       height: 932,
+      stampMs: 1000,
       payload: new Uint8Array([0xff, 0xd8]),
     });
     socket.emit('message', Buffer.from(frame), true);

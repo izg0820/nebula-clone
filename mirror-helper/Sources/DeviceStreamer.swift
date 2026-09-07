@@ -3,8 +3,11 @@ import CoreMedia
 import Foundation
 import VideoToolbox
 
-/// H.264 인코딩 설정 — 1290x2796 기준. 4Mbps는 고스팅·뿌옇게 뭉개짐 (실측), 12Mbps로 상향
-private let AVERAGE_BITRATE = 12_000_000
+/// 인코딩 해상도 배율 — 네이티브(1290x2796)는 브라우저 디코드가 못 따라가 지연 누적.
+/// 절반이면 픽셀 수 1/4, 뷰어 표시 크기(~500px) 기준 화질 손실 없음
+private let SCALE_FACTOR = 0.5
+/// H.264 인코딩 설정 — 절반 해상도 기준 8Mbps면 픽셀당 비트가 12Mbps 네이티브보다 높음
+private let AVERAGE_BITRATE = 8_000_000
 /// 키프레임 간격 — 짧을수록 압축 찌꺼기 회복·중간 합류가 빠름 (대역폭 소폭 증가)
 private let KEYFRAME_INTERVAL_SECONDS = 1.0
 private let EXPECTED_FPS = 60.0
@@ -24,6 +27,9 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private let captureQueue = DispatchQueue(label: "nebula.mirror.capture")
     private let writeQueue = DispatchQueue(label: "nebula.mirror.write")
     private var encoder: VTCompressionSession?
+    /// 다운스케일용 (SCALE_FACTOR < 1일 때만 생성)
+    private var transferSession: VTPixelTransferSession?
+    private var scaledPool: CVPixelBufferPool?
 
     init(device: AVCaptureDevice) {
         self.device = device
@@ -54,11 +60,21 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
         if encoder == nil {
-            let width = CVPixelBufferGetWidth(imageBuffer)
-            let height = CVPixelBufferGetHeight(imageBuffer)
+            let sourceWidth = CVPixelBufferGetWidth(imageBuffer)
+            let sourceHeight = CVPixelBufferGetHeight(imageBuffer)
+            // 짝수 정렬 (인코더 요구)
+            let targetWidth = Int(Double(sourceWidth) * SCALE_FACTOR) / 2 * 2
+            let targetHeight = Int(Double(sourceHeight) * SCALE_FACTOR) / 2 * 2
             do {
-                try setupEncoder(width: width, height: height)
-                log("인코더 초기화: \(width)x\(height)")
+                if SCALE_FACTOR < 1.0 {
+                    try setupDownscale(
+                        targetWidth: targetWidth,
+                        targetHeight: targetHeight,
+                        pixelFormat: CVPixelBufferGetPixelFormatType(imageBuffer)
+                    )
+                }
+                try setupEncoder(width: targetWidth, height: targetHeight)
+                log("인코더 초기화: \(targetWidth)x\(targetHeight) (원본 \(sourceWidth)x\(sourceHeight))")
             } catch {
                 log("인코더 생성 실패: \(error)")
                 exit(5)
@@ -66,10 +82,11 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         }
 
         guard let encoder else { return }
+        let inputBuffer = downscaleIfNeeded(imageBuffer)
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
         VTCompressionSessionEncodeFrame(
             encoder,
-            imageBuffer: imageBuffer,
+            imageBuffer: inputBuffer,
             presentationTimeStamp: timestamp,
             duration: .invalid,
             frameProperties: nil,
@@ -78,6 +95,47 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             guard status == noErr, let encodedBuffer, let self else { return }
             self.emitFrame(encodedBuffer)
         }
+    }
+
+    // ── 다운스케일 ──────────────────────────────────────
+
+    private func setupDownscale(targetWidth: Int, targetHeight: Int, pixelFormat: OSType) throws {
+        var newTransfer: VTPixelTransferSession?
+        let transferStatus = VTPixelTransferSessionCreate(
+            allocator: nil, pixelTransferSessionOut: &newTransfer)
+        guard transferStatus == noErr, let created = newTransfer else {
+            throw StreamerError.encoderCreationFailed(transferStatus)
+        }
+        VTSessionSetProperty(
+            created, key: kVTPixelTransferPropertyKey_ScalingMode,
+            value: kVTScalingMode_Trim)
+        transferSession = created
+
+        let poolAttributes: [CFString: Any] = [
+            kCVPixelBufferWidthKey: targetWidth,
+            kCVPixelBufferHeightKey: targetHeight,
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+        ]
+        var newPool: CVPixelBufferPool?
+        let poolStatus = CVPixelBufferPoolCreate(
+            nil, nil, poolAttributes as CFDictionary, &newPool)
+        guard poolStatus == kCVReturnSuccess, let pool = newPool else {
+            throw StreamerError.encoderCreationFailed(poolStatus)
+        }
+        scaledPool = pool
+    }
+
+    /// 다운스케일 활성 시 축소 버퍼 반환, 실패·비활성 시 원본 그대로
+    private func downscaleIfNeeded(_ source: CVImageBuffer) -> CVImageBuffer {
+        guard let transferSession, let scaledPool else { return source }
+        var scaled: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, scaledPool, &scaled) == kCVReturnSuccess,
+              let target = scaled
+        else { return source }
+        guard VTPixelTransferSessionTransferImage(transferSession, from: source, to: target) == noErr
+        else { return source }
+        return target
     }
 
     // ── 인코더 ──────────────────────────────────────────
@@ -107,6 +165,9 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_AverageBitRate, value: AVERAGE_BITRATE as CFNumber)
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, value: KEYFRAME_INTERVAL_SECONDS as CFNumber)
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_ExpectedFrameRate, value: EXPECTED_FPS as CFNumber)
+        // 지연 최소화 — 인코더 내부 프레임 홀드 금지 + 속도 우선
+        VTSessionSetProperty(created, key: kVTCompressionPropertyKey_MaxFrameDelayCount, value: 1 as CFNumber)
+        VTSessionSetProperty(created, key: kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality, value: kCFBooleanTrue)
         VTCompressionSessionPrepareToEncodeFrames(created)
         encoder = created
     }

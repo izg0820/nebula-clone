@@ -148,6 +148,7 @@ export class StreamManager {
       isKey: true,
       width: Math.round(widthPt),
       height: Math.round(heightPt),
+      stampMs: Date.now(),
       payload: Uint8Array.from(Buffer.from(jpegBase64, 'base64')),
     });
     if (!sent) return FAILURE_RETRY_MS;

@@ -78,6 +78,7 @@ export class StreamsRelayService {
       isKey: frame.isKey,
       width: frame.width,
       height: frame.height,
+      stampMs: frame.stampMs,
       payload: frame.payload,
     });
     for (const socket of sockets) {

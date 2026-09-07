@@ -57,6 +57,29 @@ export class ApiClient {
     await this.request('POST', `/devices/${deviceId}/actions/type`, { occupantId, text });
   }
 
+  async swipe(
+    deviceId: string,
+    occupantId: string,
+    fromX: number,
+    fromY: number,
+    toX: number,
+    toY: number,
+    durationMs: number,
+  ): Promise<void> {
+    await this.request('POST', `/devices/${deviceId}/actions/swipe`, {
+      occupantId,
+      fromX,
+      fromY,
+      toX,
+      toY,
+      durationMs,
+    });
+  }
+
+  async pressButton(deviceId: string, occupantId: string, button: 'home'): Promise<void> {
+    await this.request('POST', `/devices/${deviceId}/actions/press`, { occupantId, button });
+  }
+
   async screenshot(deviceId: string, occupantId: string): Promise<ScreenshotResult> {
     const response = await this.request<{ result: ScreenshotResult }>(
       'POST',

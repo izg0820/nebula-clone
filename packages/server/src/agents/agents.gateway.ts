@@ -10,8 +10,10 @@ import {
   buildStreamControlMessage,
   COMMAND_ERROR_AGENT_DISCONNECTED,
   COMMAND_ERROR_TIMEOUT,
+  COMMAND_ERROR_UNSUPPORTED,
   CommandOutcome,
   decodeAgentFrame,
+  DEVICE_ACTION_KINDS,
   DeviceAction,
   parseAgentMessage,
 } from '@nebula/shared';
@@ -30,6 +32,14 @@ import { StreamsRelayService } from '../streams/streams-relay.service';
 
 /** agentId 허용 형식 — 로그 인젝션·사칭 방지 */
 const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * 스펙 미교환(구버전) Agent에 허용하는 액션 — 스펙 교환 도입 이전부터 있던 액션만.
+ * 이후 추가되는 액션은 스펙을 교환한 Agent에만 전송 (미교환 시 타임아웃 대신 즉시 거부)
+ */
+const LEGACY_ACTION_KINDS: ReadonlySet<string> = new Set(
+  DEVICE_ACTION_KINDS.filter((kind) => kind !== 'pressButton'),
+);
 
 /** 소켓에 부착하는 Agent 식별 정보 */
 interface AgentSocket extends WebSocket {
@@ -63,6 +73,8 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly agentSockets = new Map<string, AgentSocket>();
   /** requestId → 응답 대기 항목 */
   private readonly pendingCommands = new Map<string, PendingCommand>();
+  /** agentId → 교환된 지원 액션 스펙 (미교환 구버전은 LEGACY_ACTION_KINDS 적용) */
+  private readonly agentCapabilities = new Map<string, ReadonlySet<string>>();
 
   constructor(
     private readonly config: ConfigService,
@@ -147,6 +159,7 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (this.agentSockets.get(client.agentId) !== client) return;
 
     this.agentSockets.delete(client.agentId);
+    this.agentCapabilities.delete(client.agentId);
     this.devicesService.handleAgentDisconnect(client.agentId);
     this.failPendingCommands(client.agentId);
     this.logger.log(`Agent 연결 종료: ${client.agentId} — 소속 기기 오프라인 처리`);
@@ -177,6 +190,12 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new AgentNotConnectedError(agentId);
     }
 
+    // 스펙 검사 — 미지원 액션은 전송하지 않고 즉시 거부 (구버전 Agent의 15초 타임아웃 방지)
+    const capabilities = this.agentCapabilities.get(agentId) ?? LEGACY_ACTION_KINDS;
+    if (!capabilities.has(action.kind)) {
+      return { ok: false, error: COMMAND_ERROR_UNSUPPORTED };
+    }
+
     const requestId = randomUUID();
     return new Promise<CommandOutcome>((resolve) => {
       const timer = setTimeout(() => {
@@ -200,6 +219,10 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       if (message.type === 'register') {
         this.devicesService.registerFromAgent(message.devices, agentId);
+        this.agentCapabilities.set(
+          agentId,
+          new Set(message.capabilities ?? LEGACY_ACTION_KINDS),
+        );
         this.logger.log(`기기 등록 (agent=${agentId}): ${message.devices.length}대`);
         this.resumeStreamsAfterRegister(message.devices.map((device) => device.id));
         return;

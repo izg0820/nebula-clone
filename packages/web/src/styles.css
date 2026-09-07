@@ -218,7 +218,23 @@ body {
   max-height: 72vh;
   max-width: 100%;
   border-radius: 22px;
-  cursor: crosshair;
+  /* 터치 포인트 커서 — 손가락 접점 느낌의 반투명 원 (핫스팟 중앙 16,16) */
+  cursor:
+    url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%3E%3Ccircle%20cx='16'%20cy='16'%20r='11'%20fill='%233182f6'%20fill-opacity='0.18'%20stroke='%233182f6'%20stroke-opacity='0.9'%20stroke-width='1.5'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='2.5'%20fill='%233182f6'/%3E%3C/svg%3E")
+      16 16,
+    pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 누르는 동안(드래그 중) — 접점이 눌린 느낌으로 진하게 */
+.phone-frame canvas:active,
+.phone-frame img:active {
+  cursor:
+    url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%3E%3Ccircle%20cx='16'%20cy='16'%20r='9'%20fill='%233182f6'%20fill-opacity='0.45'%20stroke='%231b64da'%20stroke-width='2'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='2.5'%20fill='%23ffffff'/%3E%3C/svg%3E")
+      16 16,
+    pointer;
 }
 
 .type-row { display: flex; gap: 8px; width: 100%; max-width: 480px; }

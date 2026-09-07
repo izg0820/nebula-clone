@@ -8,6 +8,8 @@ import { RegisterDeviceInput } from './device';
 export interface RegisterMessage {
   readonly type: 'register';
   readonly devices: readonly RegisterDeviceInput[];
+  /** 이 Agent(+Controller 쌍)가 지원하는 액션 종류 — 스펙 미교환(구버전)이면 신규 액션 거부됨 */
+  readonly capabilities?: readonly string[];
 }
 
 export interface HeartbeatMessage {
@@ -50,8 +52,12 @@ export type ServerMessage = CommandMessage | StreamControlMessage;
 
 // ── 빌더 ─────────────────────────────────────────────────
 
-export function buildRegisterMessage(devices: readonly RegisterDeviceInput[]): RegisterMessage {
-  return { type: 'register', devices };
+export function buildRegisterMessage(
+  devices: readonly RegisterDeviceInput[],
+  capabilities?: readonly string[],
+): RegisterMessage {
+  if (capabilities === undefined) return { type: 'register', devices };
+  return { type: 'register', devices, capabilities };
 }
 
 export function buildHeartbeatMessage(deviceIds: readonly string[]): HeartbeatMessage {

@@ -57,6 +57,7 @@ function isDeviceAction(value: unknown): value is DeviceAction {
   }
   if (record.kind === 'typeText') return typeof record.text === 'string';
   if (record.kind === 'screenshot') return true;
+  if (record.kind === 'pressButton') return record.button === 'home';
   return record.kind === 'uiDump';
 }
 
@@ -67,7 +68,20 @@ export function parseAgentMessage(raw: string): AgentMessage | null {
 
   if (message.type === 'register' && Array.isArray(message.devices)) {
     if (!message.devices.every(isRegisterDevice)) return null;
-    return { type: 'register', devices: message.devices as RegisterDeviceInput[] };
+    if (message.capabilities === undefined) {
+      return { type: 'register', devices: message.devices as RegisterDeviceInput[] };
+    }
+    if (
+      !Array.isArray(message.capabilities) ||
+      !message.capabilities.every((kind: unknown) => typeof kind === 'string')
+    ) {
+      return null;
+    }
+    return {
+      type: 'register',
+      devices: message.devices as RegisterDeviceInput[],
+      capabilities: message.capabilities as string[],
+    };
   }
   if (
     message.type === 'heartbeat' &&

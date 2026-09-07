@@ -17,6 +17,23 @@ describe('parseAgentMessage', () => {
     });
   });
 
+  test('register capabilities — 유효 광고는 보존, 손상은 null, 미광고는 undefined', () => {
+    const base = {
+      type: 'register',
+      devices: [{ id: 'u1', name: 'n', platform: 'ios', osVersion: '17', tags: [] }],
+    };
+
+    const advertised = parseAgentMessage(
+      JSON.stringify({ ...base, capabilities: ['tap', 'pressButton'] }),
+    );
+    expect(advertised).toMatchObject({ capabilities: ['tap', 'pressButton'] });
+
+    const legacy = parseAgentMessage(JSON.stringify(base));
+    expect(legacy && 'capabilities' in legacy && legacy.capabilities).toBeFalsy();
+
+    expect(parseAgentMessage(JSON.stringify({ ...base, capabilities: [1] }))).toBeNull();
+  });
+
   test('heartbeat 메시지 파싱', () => {
     expect(parseAgentMessage(JSON.stringify({ type: 'heartbeat', deviceIds: ['u1'] }))).toEqual({
       type: 'heartbeat',

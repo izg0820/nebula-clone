@@ -108,6 +108,7 @@ export class H264Stream {
       isKey,
       width: this.width,
       height: this.height,
+      stampMs: Date.now(),
       payload: Uint8Array.from(payload),
     });
   }

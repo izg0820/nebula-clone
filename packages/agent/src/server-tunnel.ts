@@ -6,6 +6,7 @@ import {
   buildRegisterMessage,
   CommandMessage,
   CommandOutcome,
+  DEVICE_ACTION_KINDS,
   encodeAgentFrame,
   parseServerMessage,
   RegisterDeviceInput,
@@ -129,7 +130,8 @@ export class ServerTunnel {
   }
 
   sendRegister(devices: readonly RegisterDeviceInput[]): boolean {
-    return this.send(JSON.stringify(buildRegisterMessage(devices)));
+    // 지원 액션 스펙 교환 — 서버가 미지원 액션을 타임아웃 없이 즉시 거부할 수 있게 (혼합 버전 가드)
+    return this.send(JSON.stringify(buildRegisterMessage(devices, DEVICE_ACTION_KINDS)));
   }
 
   sendHeartbeat(deviceIds: readonly string[]): boolean {

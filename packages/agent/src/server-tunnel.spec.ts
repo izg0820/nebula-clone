@@ -59,12 +59,14 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
 
       socket.on('message', (data) => {
         const message = JSON.parse(data.toString());
-        expect(message).toEqual({
+        expect(message).toMatchObject({
           type: 'register',
           devices: [
             { id: 'u1', name: 'iPhone', platform: 'ios', osVersion: '17.5', tags: [] },
           ],
         });
+        // 스펙 교환 포함 확인 — 서버의 혼합 버전 가드 전제
+        expect(message.capabilities).toContain('pressButton');
         done();
       });
     });

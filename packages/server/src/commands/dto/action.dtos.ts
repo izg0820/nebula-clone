@@ -1,5 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /** 좌표 상한 — 비정상 값 조기 차단 (현행 기기 해상도 여유 포함) */
 const MAX_COORDINATE = 10_000;
@@ -69,3 +79,9 @@ export class TypeTextDto extends CommandBaseDto {
 }
 
 export class UiDumpDto extends CommandBaseDto {}
+
+export class PressButtonDto extends CommandBaseDto {
+  @ApiProperty({ enum: ['home'], description: '하드웨어 버튼 (현재 home만)' })
+  @IsIn(['home'])
+  button!: 'home';
+}

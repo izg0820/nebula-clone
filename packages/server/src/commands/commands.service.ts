@@ -1,11 +1,12 @@
 import {
   BadGatewayException,
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   GatewayTimeoutException,
   Injectable,
 } from '@nestjs/common';
-import { COMMAND_ERROR_TIMEOUT, DeviceAction } from '@nebula/shared';
+import { COMMAND_ERROR_TIMEOUT, COMMAND_ERROR_UNSUPPORTED, DeviceAction } from '@nebula/shared';
 import { AgentNotConnectedError, AgentsGateway } from '../agents/agents.gateway';
 import { DevicesService } from '../devices/devices.service';
 
@@ -31,6 +32,9 @@ export class CommandsService {
     }
 
     const outcome = await this.sendToAgent(device.agentId, deviceId, action);
+    if (!outcome.ok && outcome.error === COMMAND_ERROR_UNSUPPORTED) {
+      throw new BadRequestException('Agent가 지원하지 않는 액션 (Agent 업데이트 필요)');
+    }
     if (!outcome.ok && outcome.error === COMMAND_ERROR_TIMEOUT) {
       throw new GatewayTimeoutException('기기 응답 시간 초과');
     }

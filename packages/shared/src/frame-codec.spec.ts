@@ -18,6 +18,7 @@ describe('frame-codec', () => {
         isKey: true,
         width: 1290,
         height: 2796,
+        stampMs: 123456789,
         payload: PAYLOAD,
       }),
     );
@@ -28,6 +29,7 @@ describe('frame-codec', () => {
       isKey: true,
       width: 1290,
       height: 2796,
+      stampMs: 123456789,
     });
     expect(Array.from(decoded?.payload ?? [])).toEqual(Array.from(PAYLOAD));
   });
@@ -39,6 +41,7 @@ describe('frame-codec', () => {
         isKey: true,
         width: 430,
         height: 932,
+        stampMs: 42,
         payload: PAYLOAD,
       }),
     );
@@ -54,6 +57,7 @@ describe('frame-codec', () => {
         isKey: false,
         width: 100,
         height: 200,
+        stampMs: 7,
         payload: PAYLOAD,
       }),
     ]);
@@ -77,6 +81,7 @@ describe('frame-codec', () => {
         isKey: true,
         width: 1,
         height: 1,
+        stampMs: 0,
         payload: PAYLOAD,
       }),
     ).toThrow(/deviceId/);
@@ -87,6 +92,7 @@ describe('frame-codec', () => {
         isKey: true,
         width: 70_000,
         height: 1,
+        stampMs: 0,
         payload: PAYLOAD,
       }),
     ).toThrow(/범위/);

@@ -26,6 +26,7 @@ function toControllerRequest(action: DeviceAction): ControllerRequest {
   }
   if (action.kind === 'typeText') return { path: '/type', body: { text: action.text } };
   if (action.kind === 'screenshot') return { path: '/screenshot', body: {} };
+  if (action.kind === 'pressButton') return { path: '/press', body: { button: action.button } };
   return { path: '/ui', body: {} };
 }
 
