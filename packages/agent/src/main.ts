@@ -54,11 +54,7 @@ async function main(): Promise<void> {
     },
     onCommand: (command) => executor.execute(command),
     onStreamControl: (deviceId, shouldStart) => {
-      if (shouldStart) {
-        streamManager.start(deviceId);
-        return;
-      }
-      streamManager.stop(deviceId);
+      streamManager.handleStreamControl(deviceId, shouldStart);
     },
   });
   const streamManager = new StreamManager(resolver, (frame) => tunnel.sendFrame(frame), {
@@ -80,11 +76,12 @@ async function main(): Promise<void> {
       const shouldRegister = discoveryState.apply(result);
 
       // 등록 여부와 무관하게 세션 동기화 — 연속 실패 임계로 목록이 비워진 경우에도 세션 정리
-      supervisor?.syncDevices(
-        discoveryState.current
-          .map((device) => device.id)
-          .filter((id) => !staticDeviceIds.has(id)),
-      );
+      const realDeviceIds = discoveryState.current
+        .map((device) => device.id)
+        .filter((id) => !staticDeviceIds.has(id));
+      supervisor?.syncDevices(realDeviceIds);
+      // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (H.264 모드 한정)
+      streamManager.syncAlwaysOn(realDeviceIds);
       if (!shouldRegister) return;
 
       const sent = tunnel.sendRegister(withReadinessTag(discoveryState.current, resolver));

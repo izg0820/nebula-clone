@@ -47,9 +47,9 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
       { helperPath: null, resolveDeviceName: () => null },
     );
 
-    manager.start('u1');
+    manager.handleStreamControl('u1', true);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    manager.stop('u1');
+    manager.handleStreamControl('u1', false);
     const countAtStop = frames.length;
     await new Promise((resolve) => setTimeout(resolve, 200));
 
@@ -67,8 +67,8 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
       { helperPath: null, resolveDeviceName: () => null },
     );
 
-    manager.start('u1');
-    manager.start('u1');
+    manager.handleStreamControl('u1', true);
+    manager.handleStreamControl('u1', true);
     await new Promise((resolve) => setTimeout(resolve, 250));
     manager.stopAll();
     const count = requestCount;
@@ -88,8 +88,28 @@ describe('StreamManager (실제 HTTP Controller 연동)', () => {
       { helperPath: null, resolveDeviceName: () => null },
     );
 
-    manager.start('unknown');
+    manager.handleStreamControl('unknown', true);
     await new Promise((resolve) => setTimeout(resolve, 150));
+    manager.stopAll();
+
+    expect(frames).toHaveLength(0);
+  });
+});
+
+describe('StreamManager 상시 구동 정책', () => {
+  test('JPEG 모드(helperPath 없음)에서 syncAlwaysOn은 아무것도 시작하지 않음', async () => {
+    const frames: AgentFrame[] = [];
+    const manager = new StreamManager(
+      new StaticControllerRegistry(new Map()),
+      (frame) => {
+        frames.push(frame);
+        return true;
+      },
+      { helperPath: null, resolveDeviceName: () => null },
+    );
+
+    manager.syncAlwaysOn(['u1', 'u2']);
+    await new Promise((resolve) => setTimeout(resolve, 100));
     manager.stopAll();
 
     expect(frames).toHaveLength(0);

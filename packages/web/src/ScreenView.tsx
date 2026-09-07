@@ -24,6 +24,9 @@ function toStreamUrl(serverUrl: string, deviceId: string, token: string): string
   return url.toString();
 }
 
+/** 디코드 큐가 이 이상 밀리면 과부하 — 키프레임부터 재동기화 (지연 누적 방지) */
+const MAX_DECODE_QUEUE = 15;
+
 /** H.264 Annex-B 스트림용 WebCodecs 디코더 — 키프레임 대기 후 기동, 오류 시 다음 키프레임까지 리셋 */
 class H264Player {
   private decoder: VideoDecoder | null = null;
@@ -34,6 +37,13 @@ class H264Player {
 
   push(payload: Uint8Array, isKey: boolean, width: number, height: number): void {
     if (this.isWaitingKeyframe && !isKey) return;
+
+    // 디코더가 못 따라오면 큐를 버리고 다음 키프레임부터 — 지연이 계속 커지는 것 방지
+    if (this.decoder && this.decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      this.close();
+      this.isWaitingKeyframe = true;
+      if (!isKey) return;
+    }
 
     if (!this.decoder || this.decoder.state === 'closed') {
       this.decoder = this.createDecoder(width, height);
@@ -58,8 +68,9 @@ class H264Player {
   private createDecoder(width: number, height: number): VideoDecoder {
     const decoder = new VideoDecoder({
       output: (frame: VideoFrame) => {
-        this.canvas.width = frame.displayWidth;
-        this.canvas.height = frame.displayHeight;
+        // 캔버스 크기 대입은 값이 같아도 전체 클리어를 유발 — 변경 시에만 (매 프레임 리셋 = 깜빡임)
+        if (this.canvas.width !== frame.displayWidth) this.canvas.width = frame.displayWidth;
+        if (this.canvas.height !== frame.displayHeight) this.canvas.height = frame.displayHeight;
         this.canvas.getContext('2d')?.drawImage(frame, 0, 0);
         frame.close();
       },

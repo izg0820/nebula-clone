@@ -47,9 +47,31 @@ export class StreamManager {
     private readonly options: StreamManagerOptions,
   ) {}
 
-  start(deviceId: string): void {
-    if (this.startH264(deviceId)) return;
-    this.startJpeg(deviceId);
+  /**
+   * H.264 상시 구동(pre-warm) 동기화 — 기기 발견 주기마다 호출.
+   * 시청자와 무관하게 준비된 기기의 캡처를 유지, 기기가 사라질 때만 종료 (원문의 상시 운영 철학)
+   */
+  syncAlwaysOn(deviceIds: readonly string[]): void {
+    if (!this.options.helperPath) return; // JPEG 폴백은 시청자 게이트 유지
+
+    for (const deviceId of deviceIds) this.startH264(deviceId);
+    for (const deviceId of [...this.h264Streams.keys()]) {
+      if (!deviceIds.includes(deviceId)) this.stop(deviceId);
+    }
+  }
+
+  /** 서버의 시청자 기반 start/stop — H.264 상시 모드에서는 무시 (JPEG 폴백 전용) */
+  handleStreamControl(deviceId: string, shouldStart: boolean): void {
+    if (this.options.helperPath) {
+      // 상시 모드: 시작은 syncAlwaysOn이 담당, 중지는 pre-warm 유지 위해 무시
+      if (shouldStart) this.startH264(deviceId);
+      return;
+    }
+    if (shouldStart) {
+      this.startJpeg(deviceId);
+      return;
+    }
+    this.stop(deviceId);
   }
 
   stop(deviceId: string): void {

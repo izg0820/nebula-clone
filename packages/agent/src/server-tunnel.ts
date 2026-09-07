@@ -96,6 +96,8 @@ export class ServerTunnel {
     this.socket = socket;
 
     socket.on('open', () => {
+      // 실시간 프레임 스트림용 — Nagle 병합으로 인한 배출 지연 방지
+      (socket as WebSocket & { _socket?: { setNoDelay?: (v: boolean) => void } })._socket?.setNoDelay?.(true);
       logger.info({ url: this.config.serverUrl }, '서버 터널 연결됨');
       // 즉시 리셋 금지 — 서버가 곧바로 끊는 연결(4401 등)로 백오프가 풀리면 1초 폭주가 됨
       this.stableResetTimer = setTimeout(() => {

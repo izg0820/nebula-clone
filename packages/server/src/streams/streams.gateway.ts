@@ -9,6 +9,7 @@ import type { IncomingMessage } from 'http';
 import type { WebSocket } from 'ws';
 import { isTokenEqual } from '../auth/token.guard';
 import { STREAM_WS_PATH, VIEWER_WS_MAX_PAYLOAD_BYTES } from '../config/constants';
+import { disableNagle } from './socket-tuning';
 import { StreamsRelayService } from './streams-relay.service';
 
 /** 소켓에 부착하는 구독 정보 */
@@ -46,6 +47,7 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
     }
 
     client.deviceId = deviceId;
+    disableNagle(client);
     this.relay.addViewer(deviceId, client);
   }
 

@@ -25,6 +25,7 @@ import {
   COMMAND_TIMEOUT_MS,
 } from '../config/constants';
 import { DevicesService } from '../devices/devices.service';
+import { disableNagle } from '../streams/socket-tuning';
 import { StreamsRelayService } from '../streams/streams-relay.service';
 
 /** agentId 허용 형식 — 로그 인젝션·사칭 방지 */
@@ -97,6 +98,7 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     client.agentId = agentId;
+    disableNagle(client);
     this.agentSockets.set(agentId, client);
     this.logger.log(`Agent 연결: ${agentId}`);
 
