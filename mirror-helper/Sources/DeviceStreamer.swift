@@ -11,6 +11,12 @@ private let AVERAGE_BITRATE = 8_000_000
 /// 키프레임 간격 — 짧을수록 압축 찌꺼기 회복·중간 합류가 빠름 (대역폭 소폭 증가)
 private let KEYFRAME_INTERVAL_SECONDS = 1.0
 private let EXPECTED_FPS = 60.0
+/// 프레임 워치독 — 이 시간 동안 emit 0회면 캡처가 무음 정지한 것으로 보고 종료
+/// (프로세스가 살아 있으면 Agent가 재기동하지 않으므로, 크게 실패하고 죽는 것이 복구 경로)
+private let FRAME_STALL_EXIT_SECONDS = 15.0
+private let WATCHDOG_INTERVAL_SECONDS = 5.0
+/// 인코딩 연속 실패 허용 횟수 — 초과 시 종료 (Agent가 재기동)
+private let MAX_CONSECUTIVE_ENCODE_FAILURES = 30
 
 /// Annex-B 시작 코드
 private let START_CODE = Data([0x00, 0x00, 0x00, 0x01])
@@ -30,6 +36,11 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     /// 다운스케일용 (SCALE_FACTOR < 1일 때만 생성)
     private var transferSession: VTPixelTransferSession?
     private var scaledPool: CVPixelBufferPool?
+    /// 마지막 프레임 emit 시각 — writeQueue에서만 접근 (워치독도 같은 큐)
+    private var lastFrameAt = Date()
+    private var watchdog: DispatchSourceTimer?
+    /// 인코딩 연속 실패 카운트 — writeQueue에서만 접근
+    private var consecutiveEncodeFailures = 0
 
     init(device: AVCaptureDevice) {
         self.device = device
@@ -46,8 +57,49 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         guard session.canAddOutput(output) else { throw StreamerError.inputRejected }
         session.addOutput(output)
 
+        observeSilentStops()
         session.startRunning()
+        lastFrameAt = Date()
+        startWatchdog()
         log("캡처 세션 시작")
+    }
+
+    // ── 무음 정지 감지 ───────────────────────────────────
+    // 캡처 세션 오류·USB 분리 시 델리게이트 콜백만 조용히 끊긴다 — 프로세스가 살아 있으면
+    // Agent가 재기동하지 않으므로, 감지 즉시 크게 실패하고 종료한다 (Agent가 2초 후 재기동)
+
+    private func observeSilentStops() {
+        NotificationCenter.default.addObserver(
+            forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: nil
+        ) { notification in
+            let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
+            log("캡처 세션 런타임 오류: \(error?.localizedDescription ?? "?") — 종료")
+            exit(6)
+        }
+        NotificationCenter.default.addObserver(
+            forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let self, let disconnected = notification.object as? AVCaptureDevice,
+                  disconnected.uniqueID == self.device.uniqueID
+            else { return }
+            log("캡처 장치 분리됨 (USB 해제 추정) — 종료")
+            exit(6)
+        }
+    }
+
+    private func startWatchdog() {
+        let timer = DispatchSource.makeTimerSource(queue: writeQueue)
+        timer.schedule(
+            deadline: .now() + WATCHDOG_INTERVAL_SECONDS, repeating: WATCHDOG_INTERVAL_SECONDS)
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let stalledSeconds = Date().timeIntervalSince(self.lastFrameAt)
+            guard stalledSeconds > FRAME_STALL_EXIT_SECONDS else { return }
+            log("프레임 정지 감지 (\(Int(stalledSeconds))초간 emit 없음) — 종료")
+            exit(7)
+        }
+        timer.resume()
+        watchdog = timer
     }
 
     // ── 캡처 콜백 ────────────────────────────────────────
@@ -84,7 +136,7 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
         guard let encoder else { return }
         let inputBuffer = downscaleIfNeeded(imageBuffer)
         let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        VTCompressionSessionEncodeFrame(
+        let submitStatus = VTCompressionSessionEncodeFrame(
             encoder,
             imageBuffer: inputBuffer,
             presentationTimeStamp: timestamp,
@@ -92,8 +144,30 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             frameProperties: nil,
             infoFlagsOut: nil
         ) { [weak self] status, _, encodedBuffer in
-            guard status == noErr, let encodedBuffer, let self else { return }
+            guard let self else { return }
+            guard status == noErr, let encodedBuffer else {
+                self.recordEncodeFailure(reason: "인코딩 콜백 status=\(status)")
+                return
+            }
             self.emitFrame(encodedBuffer)
+        }
+        if submitStatus != noErr {
+            recordEncodeFailure(reason: "EncodeFrame 제출 status=\(submitStatus)")
+        }
+    }
+
+    /// 인코딩 실패 집계 — 무음으로 삼키지 않고 로그, 연속 임계 초과 시 종료 (Agent가 재기동)
+    private func recordEncodeFailure(reason: String) {
+        writeQueue.async { [weak self] in
+            guard let self else { return }
+            self.consecutiveEncodeFailures += 1
+            if self.consecutiveEncodeFailures == 1 || self.consecutiveEncodeFailures % 10 == 0 {
+                log("인코딩 실패 (\(self.consecutiveEncodeFailures)회 연속): \(reason)")
+            }
+            if self.consecutiveEncodeFailures >= MAX_CONSECUTIVE_ENCODE_FAILURES {
+                log("인코딩 연속 실패 임계 초과 — 종료")
+                exit(8)
+            }
         }
     }
 
@@ -196,6 +270,8 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
 
         writeQueue.sync {
             FileHandle.standardOutput.write(packet)
+            lastFrameAt = Date()
+            consecutiveEncodeFailures = 0
         }
     }
 

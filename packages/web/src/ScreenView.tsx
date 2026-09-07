@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { decodeViewerFrame } from '@nebula/shared';
-import { ApiClient, ApiError } from './api';
+import { ApiClient, ApiError, toErrorMessage } from './api';
 import { interpretGesture, toDevicePoint, ScreenSize } from './coordinates';
 
 interface ScreenViewProps {
@@ -16,28 +16,68 @@ interface ScreenViewProps {
   readonly onRelease: () => void;
 }
 
-/** http(s) → ws(s) 스킴 변환 */
-function toStreamUrl(serverUrl: string, deviceId: string, token: string): string {
-  const url = new URL(serverUrl);
-  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  url.pathname = '/stream';
-  url.searchParams.set('deviceId', deviceId);
-  url.searchParams.set('token', token);
-  return url.toString();
+/** http(s) → ws(s) 스킴 변환 — 파싱 실패는 null (설정 입력 중 잘못된 URL로 앱이 죽지 않게) */
+function toStreamUrl(serverUrl: string, deviceId: string, token: string): string | null {
+  try {
+    const url = new URL(serverUrl);
+    url.protocol = toWsProtocol(url.protocol);
+    url.pathname = '/stream';
+    url.searchParams.set('deviceId', deviceId);
+    url.searchParams.set('token', token);
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function toWsProtocol(httpProtocol: string): string {
+  if (httpProtocol === 'https:') return 'wss:';
+  return 'ws:';
 }
 
 /** 디코드 큐가 이 이상 밀리면 과부하 — 키프레임부터 재동기화. 5개 ≈ 지연 상한 ~170ms */
 const MAX_DECODE_QUEUE = 5;
+
+/** 디코드 연속 실패가 이 횟수에 달하면 사용자에게 표면화 (일시 오류는 키프레임 재동기화로 조용히 복구) */
+const DECODE_FAILURE_REPORT_THRESHOLD = 3;
+
+function toChunkType(isKey: boolean): EncodedVideoChunkType {
+  if (isKey) return 'key';
+  return 'delta';
+}
+
+function frameDisplay(hasFrame: boolean): 'block' | 'none' {
+  if (hasFrame) return 'block';
+  return 'none';
+}
 
 /** H.264 Annex-B 스트림용 WebCodecs 디코더 — 키프레임 대기 후 기동, 오류 시 다음 키프레임까지 리셋 */
 class H264Player {
   private decoder: VideoDecoder | null = null;
   private isWaitingKeyframe = true;
   private timestamp = 0;
+  private consecutiveFailures = 0;
 
-  constructor(private readonly canvas: HTMLCanvasElement) {}
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    /** 프레임이 실제로 디코드·표시됨 — fps 집계는 수신이 아니라 이 기준 */
+    private readonly onDecoded: () => void,
+    /** 반복 실패 — 검은 화면인데 fps만 도는 무증상 상태를 사용자에게 알림 */
+    private readonly onFailure: (message: string) => void,
+  ) {}
 
   push(payload: Uint8Array, isKey: boolean, width: number, height: number): void {
+    try {
+      this.decodeChunk(payload, isKey, width, height);
+    } catch (error) {
+      // configure/decode 동기 예외 — WS 핸들러 밖으로 새면 조용히 사라짐
+      this.recordFailure(`디코더 오류: ${toErrorMessage(error)}`);
+      this.isWaitingKeyframe = true;
+      this.close();
+    }
+  }
+
+  private decodeChunk(payload: Uint8Array, isKey: boolean, width: number, height: number): void {
     if (this.isWaitingKeyframe && !isKey) return;
 
     // 디코더가 못 따라오면 큐를 버리고 다음 키프레임부터 — 지연이 계속 커지는 것 방지
@@ -55,7 +95,7 @@ class H264Player {
 
     this.decoder.decode(
       new EncodedVideoChunk({
-        type: isKey ? 'key' : 'delta',
+        type: toChunkType(isKey),
         timestamp: this.timestamp,
         data: payload as BufferSource,
       }),
@@ -67,6 +107,13 @@ class H264Player {
     this.decoder = null;
   }
 
+  private recordFailure(message: string): void {
+    this.consecutiveFailures += 1;
+    if (this.consecutiveFailures === DECODE_FAILURE_REPORT_THRESHOLD) {
+      this.onFailure(`H.264 디코딩 반복 실패 — ${message}`);
+    }
+  }
+
   private createDecoder(width: number, height: number): VideoDecoder {
     const decoder = new VideoDecoder({
       output: (frame: VideoFrame) => {
@@ -75,9 +122,12 @@ class H264Player {
         if (this.canvas.height !== frame.displayHeight) this.canvas.height = frame.displayHeight;
         this.canvas.getContext('2d')?.drawImage(frame, 0, 0);
         frame.close();
+        this.consecutiveFailures = 0;
+        this.onDecoded();
       },
-      error: () => {
-        // 디코드 오류 — 다음 키프레임부터 재기동
+      error: (error: DOMException) => {
+        // 디코드 오류 — 다음 키프레임부터 재기동, 반복되면 표면화
+        this.recordFailure(error.message);
         this.isWaitingKeyframe = true;
         this.close();
       },
@@ -130,8 +180,7 @@ export function ScreenView({
         onError('점유가 만료되어 해제됐습니다 — 다시 점유해주세요');
         return;
       }
-      const message = error instanceof Error ? error.message : String(error);
-      onError(`${prefix}: ${message}`);
+      onError(`${prefix}: ${toErrorMessage(error)}`);
     },
     [onError, onOccupationLost],
   );
@@ -154,19 +203,40 @@ export function ScreenView({
 
   // 스트림 수신
   useEffect(() => {
+    if (typeof VideoDecoder === 'undefined') {
+      onError('이 브라우저는 WebCodecs를 지원하지 않아 미러링을 표시할 수 없습니다');
+      return;
+    }
+    const streamUrl = toStreamUrl(serverUrl, deviceId, token);
+    if (!streamUrl) {
+      onError('서버 주소 형식 오류 — 스트림 연결 불가');
+      return;
+    }
+
     let isActive = true;
     let player: H264Player | null = null;
-    const socket = new WebSocket(toStreamUrl(serverUrl, deviceId, token));
+    const socket = new WebSocket(streamUrl);
     socket.binaryType = 'arraybuffer';
+
+    const createPlayer = (canvas: HTMLCanvasElement): H264Player =>
+      new H264Player(
+        canvas,
+        () => {
+          // fps·표시 여부는 실제 디코드 기준 — 수신 기준이면 "fps는 도는데 검은 화면"을 못 알아챔
+          frameCountRef.current += 1;
+          setHasFrame(true);
+        },
+        (message) => {
+          if (isActive) onError(message);
+        },
+      );
 
     socket.onmessage = (event: MessageEvent<ArrayBuffer>) => {
       if (!isActive) return;
       const frame = decodeViewerFrame(new Uint8Array(event.data));
       if (!frame) return;
-      frameCountRef.current += 1;
 
-      setHasFrame(true);
-      if (!player && canvasRef.current) player = new H264Player(canvasRef.current);
+      if (!player && canvasRef.current) player = createPlayer(canvasRef.current);
       player?.push(frame.payload, frame.isKey, frame.width, frame.height);
     };
     socket.onclose = (event) => {
@@ -299,7 +369,7 @@ export function ScreenView({
           <div>러너 준비·첫 프레임 대기</div>
         </div>
       )}
-      <div className="phone-frame" style={{ display: hasFrame ? 'block' : 'none' }}>
+      <div className="phone-frame" style={{ display: frameDisplay(hasFrame) }}>
         <canvas
           ref={canvasRef}
           onPointerDown={handlePointerDown}

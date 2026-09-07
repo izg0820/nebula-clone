@@ -27,6 +27,8 @@ export interface SupervisorConfig {
   readonly derivedDataDir: string;
   /** 기기별 xcodebuild 로그 디렉터리 — 실패 원인 진단용 */
   readonly logDir: string;
+  /** Controller 토큰 — 설정 시 러너 env(TEST_RUNNER_...)로 주입 + 헬스체크 헤더 첨부 */
+  readonly controllerToken?: string | null;
 }
 
 /** 자식 프로세스 최소 인터페이스 (테스트 주입용) */
@@ -75,27 +77,49 @@ function openLogFd(logPath: string): number | null {
   }
 }
 
-/** stdout·stderr를 로그 파일에 append — 서명 만료·빌드 실패 진단 근거 확보 */
-function defaultSpawn(command: string, args: readonly string[], logPath: string): ChildLike {
-  const fd = openLogFd(logPath);
-  const stdio: ('ignore' | number)[] = fd === null ? ['ignore', 'ignore', 'ignore'] : ['ignore', fd, fd];
-  // detached: 프로세스 그룹 리더로 만들어 그룹 단위 종료 가능하게
-  const child = spawn(command, [...args], { stdio, detached: true });
-  // spawn이 fd를 자식에 dup하므로 부모 사본은 즉시 닫음 — 재기동 루프에서 fd 누수 방지
-  if (fd !== null) closeSync(fd);
-  return child;
+function toStdio(fd: number | null): ('ignore' | number)[] {
+  if (fd === null) return ['ignore', 'ignore', 'ignore'];
+  return ['ignore', fd, fd];
 }
 
-async function defaultCheckHealth(baseUrl: string): Promise<boolean> {
-  try {
-    const response = await fetch(`${baseUrl}/health`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-    });
-    return response.ok;
-  } catch {
-    return false;
-  }
+/** TEST_RUNNER_ 접두사 env는 xcodebuild가 러너 프로세스 환경으로 전달함 — 토큰 배선 */
+function toRunnerEnv(controllerToken: string | null): NodeJS.ProcessEnv {
+  if (!controllerToken) return process.env;
+  return { ...process.env, TEST_RUNNER_NEBULA_CONTROLLER_TOKEN: controllerToken };
+}
+
+function toTokenHeaders(controllerToken: string | null): Record<string, string> {
+  if (!controllerToken) return {};
+  return { 'x-nebula-token': controllerToken };
+}
+
+/** stdout·stderr를 로그 파일에 append — 서명 만료·빌드 실패 진단 근거 확보 */
+function makeDefaultSpawn(controllerToken: string | null): SupervisorDeps['spawnProcess'] {
+  const env = toRunnerEnv(controllerToken);
+  return (command, args, logPath) => {
+    const fd = openLogFd(logPath);
+    // detached: 프로세스 그룹 리더로 만들어 그룹 단위 종료 가능하게
+    const child = spawn(command, [...args], { stdio: toStdio(fd), detached: true, env });
+    // spawn이 fd를 자식에 dup하므로 부모 사본은 즉시 닫음 — 재기동 루프에서 fd 누수 방지
+    if (fd !== null) closeSync(fd);
+    return child;
+  };
+}
+
+function makeDefaultCheckHealth(controllerToken: string | null): SupervisorDeps['checkHealth'] {
+  const headers = toTokenHeaders(controllerToken);
+  return async (baseUrl) => {
+    try {
+      const response = await fetch(`${baseUrl}/health`, {
+        method: 'POST',
+        headers,
+        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  };
 }
 
 /** 프로세스 그룹에 시그널 전송 — pid 없거나 그룹 전송 실패 시 단일 프로세스로 폴백 */
@@ -133,9 +157,10 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     private readonly config: SupervisorConfig,
     deps: Partial<SupervisorDeps> = {},
   ) {
+    const controllerToken = config.controllerToken ?? null;
     this.deps = {
-      spawnProcess: deps.spawnProcess ?? defaultSpawn,
-      checkHealth: deps.checkHealth ?? defaultCheckHealth,
+      spawnProcess: deps.spawnProcess ?? makeDefaultSpawn(controllerToken),
+      checkHealth: deps.checkHealth ?? makeDefaultCheckHealth(controllerToken),
     };
   }
 

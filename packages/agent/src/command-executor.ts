@@ -12,7 +12,10 @@ export class CommandExecutor {
   /** 기기별 직렬 큐 — Controller는 UI 액션을 순차 처리하므로 동시 전송은 타임아웃만 유발 */
   private readonly deviceQueues = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly resolver: ControllerEndpointResolver) {}
+  constructor(
+    private readonly resolver: ControllerEndpointResolver,
+    private readonly controllerToken: string | null = null,
+  ) {}
 
   async execute(command: CommandMessage): Promise<CommandOutcome> {
     const baseUrl = this.resolver.resolve(command.deviceId);
@@ -35,7 +38,7 @@ export class CommandExecutor {
   private clientFor(baseUrl: string): ControllerClient {
     const existing = this.clients.get(baseUrl);
     if (existing) return existing;
-    const client = new ControllerClient(baseUrl);
+    const client = new ControllerClient(baseUrl, this.controllerToken);
     this.clients.set(baseUrl, client);
     return client;
   }

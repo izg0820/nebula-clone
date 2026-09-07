@@ -18,7 +18,10 @@ function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupe
   if (config.controllerPorts.size > 0) {
     logger.warn('수퍼바이저 모드에서는 NEBULA_CONTROLLER_PORTS 무시됨');
   }
-  return new ControllerSupervisor(config.supervisor);
+  return new ControllerSupervisor({
+    ...config.supervisor,
+    controllerToken: config.controllerToken,
+  });
 }
 
 /** H.264 미러링 관리자 — NEBULA_MIRROR_HELPER 미설정 시 미러링 비활성 */
@@ -60,7 +63,7 @@ async function main(): Promise<void> {
   const supervisor = createSupervisor(config);
   const resolver: ControllerEndpointResolver =
     supervisor ?? new StaticControllerRegistry(config.controllerPorts);
-  const executor = new CommandExecutor(resolver);
+  const executor = new CommandExecutor(resolver, config.controllerToken);
   // 정적 기기는 실기기가 아니므로 수퍼바이저(xcodebuild) 대상에서 제외
   const staticDeviceIds = new Set(config.staticDevices.map((device) => device.id));
   let isDiscoveryInFlight = false;

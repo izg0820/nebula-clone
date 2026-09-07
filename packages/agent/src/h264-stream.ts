@@ -2,10 +2,17 @@ import { ChildProcess, spawn } from 'child_process';
 import { AgentFrame, FRAME_FORMAT_H264 } from '@nebula/shared';
 import { logger } from './logger';
 
-/** 헬퍼 사망 시 재기동 대기 */
-const HELPER_RESTART_MS = 2_000;
+/** 헬퍼 사망 시 재기동 백오프 (지수, 상한 60초) — 경로 오타·장치 미발행의 2초 무한 폭주 방지 */
+const HELPER_RESTART_BASE_MS = 2_000;
+const HELPER_RESTART_MAX_MS = 60_000;
+/** 연속 재기동이 이 횟수를 넘으면 warn → error 승격 (설정 오류 가능성) */
+const RESTART_ERROR_THRESHOLD = 5;
 /** SIGTERM 후 이 시간 내 미종료 시 SIGKILL — 행한 헬퍼가 캡처 장치를 계속 점유하는 것 방지 */
 const KILL_ESCALATION_MS = 2_000;
+/** 기동 후 이 시간 내 해상도(stderr 로그) 미확보 시 재기동 — 프레임 무음 폐기 방지 */
+const RESOLUTION_DEADLINE_MS = 20_000;
+/** 해상도 미확보로 폐기한 프레임 로그 주기 */
+const DROPPED_LOG_INTERVAL = 100;
 /** 패킷 상한 — 손상 스트림으로 인한 메모리 폭주 방지 */
 const MAX_PACKET_BYTES = 8 * 1024 * 1024;
 
@@ -48,8 +55,12 @@ export class H264Stream {
   private child: ChildProcess | null = null;
   private isActive = false;
   private restartTimer: NodeJS.Timeout | null = null;
+  private resolutionTimer: NodeJS.Timeout | null = null;
+  private restartAttempt = 0;
   private width = 0;
   private height = 0;
+  /** 해상도 미확보 상태에서 폐기한 프레임 수 — 무음 폐기 방지용 관측 */
+  private droppedBeforeResolution = 0;
 
   constructor(
     private readonly config: H264StreamConfig,
@@ -68,6 +79,7 @@ export class H264Stream {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    this.clearResolutionTimer();
     const child = this.child;
     this.child = null;
     if (!child) return;
@@ -83,10 +95,15 @@ export class H264Stream {
 
   private launch(): void {
     const parser = new HelperPacketParser();
+    // 새 헬퍼 세션의 프레임이 이전 세션 해상도로 나가지 않도록 리셋
+    this.width = 0;
+    this.height = 0;
+    this.droppedBeforeResolution = 0;
     const child = spawn(this.config.helperPath, ['--name', this.config.deviceName], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     this.child = child;
+    this.armResolutionDeadline(child);
 
     child.stdout?.on('data', (chunk: Buffer) => {
       const packets = parser.push(chunk);
@@ -112,7 +129,18 @@ export class H264Stream {
   }
 
   private emit(isKey: boolean, payload: Buffer): void {
-    if (!this.isActive || this.width === 0) return;
+    if (!this.isActive) return;
+    if (this.width === 0) {
+      // 해상도(stderr 계약) 미확보 — 무음 폐기 금지, 주기적으로 관측 가능하게
+      this.droppedBeforeResolution += 1;
+      if (this.droppedBeforeResolution % DROPPED_LOG_INTERVAL === 1) {
+        logger.warn(
+          { deviceId: this.config.deviceId, dropped: this.droppedBeforeResolution },
+          '해상도 미확보로 프레임 폐기 중 (헬퍼 stderr 계약 확인 필요)',
+        );
+      }
+      return;
+    }
     this.sendFrame({
       deviceId: this.config.deviceId,
       format: FRAME_FORMAT_H264,
@@ -130,6 +158,8 @@ export class H264Stream {
     if (match) {
       this.width = Number(match[1]);
       this.height = Number(match[2]);
+      this.restartAttempt = 0;
+      this.clearResolutionTimer();
       logger.info(
         { deviceId: this.config.deviceId, width: this.width, height: this.height },
         'H.264 미러링 스트림 활성',
@@ -137,12 +167,43 @@ export class H264Stream {
     }
   }
 
+  /** 기동 후 해상도 미확보가 지속되면 헬퍼 재기동 — stderr 계약 불일치가 무음 폐기로 남지 않게 */
+  private armResolutionDeadline(child: ChildProcess): void {
+    this.clearResolutionTimer();
+    this.resolutionTimer = setTimeout(() => {
+      this.resolutionTimer = null;
+      if (!this.isActive || this.child !== child || this.width !== 0) return;
+      logger.error(
+        { deviceId: this.config.deviceId, dropped: this.droppedBeforeResolution },
+        '해상도 확보 실패 — 헬퍼 재기동 (stderr 계약 "인코더 초기화: WxH" 미수신)',
+      );
+      child.kill('SIGTERM');
+    }, RESOLUTION_DEADLINE_MS);
+    this.resolutionTimer.unref();
+  }
+
+  private clearResolutionTimer(): void {
+    if (!this.resolutionTimer) return;
+    clearTimeout(this.resolutionTimer);
+    this.resolutionTimer = null;
+  }
+
   private scheduleRestart(): void {
     if (!this.isActive || this.restartTimer) return;
+    this.clearResolutionTimer();
+
+    const delay = Math.min(HELPER_RESTART_BASE_MS * 2 ** this.restartAttempt, HELPER_RESTART_MAX_MS);
+    this.restartAttempt += 1;
+    if (this.restartAttempt >= RESTART_ERROR_THRESHOLD) {
+      logger.error(
+        { deviceId: this.config.deviceId, attempt: this.restartAttempt, delay },
+        '헬퍼 연속 재기동 — 설정(NEBULA_MIRROR_HELPER 경로)·캡처 장치 발행 상태 확인 필요',
+      );
+    }
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
       if (!this.isActive) return;
       this.launch();
-    }, HELPER_RESTART_MS);
+    }, delay);
   }
 }

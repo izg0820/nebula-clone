@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ApiClient, PublicDevice } from './api';
+import { ApiClient, ApiError, PublicDevice, toErrorMessage } from './api';
 import { DeviceCard } from './DeviceCard';
 import { ScreenView } from './ScreenView';
 import { SettingsPanel } from './SettingsPanel';
@@ -99,8 +99,20 @@ export function App() {
     if (!occupation) return;
     api
       .release(occupation.deviceId, occupation.occupantId)
-      .catch((error: Error) => setStatus(`해제 실패: ${error.message}`))
-      .finally(() => setOccupation(null));
+      .then(() => {
+        setOccupation(null);
+        setStatus('');
+      })
+      .catch((error: unknown) => {
+        // 서버가 점유를 모르는 경우(만료·불일치)만 세션 폐기 — 일시 오류에 occupantId를
+        // 버리면 해제 수단이 사라져 기기가 잠김 (점유 TTL 부재)
+        if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+          setOccupation(null);
+          setStatus('점유가 이미 무효라 세션을 정리했습니다');
+          return;
+        }
+        setStatus(`해제 실패 — 세션 유지됨, 다시 시도하세요: ${toErrorMessage(error)}`);
+      });
   }, [api, occupation]);
 
   const occupiedDevice = devices.find((device) => device.id === occupation?.deviceId);
@@ -128,6 +140,7 @@ export function App() {
                 key={device.id}
                 device={device}
                 isMine={occupation?.deviceId === device.id}
+                hasOtherOccupation={occupation !== null && occupation.deviceId !== device.id}
                 onOccupy={handleOccupy}
                 onRelease={handleRelease}
               />

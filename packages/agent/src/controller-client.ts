@@ -35,14 +35,20 @@ function toControllerRequest(action: DeviceAction): ControllerRequest {
  * Controller는 상시 구동(pre-warm) 전제 — 세션 개념 없음
  */
 export class ControllerClient {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    /** 러너의 TEST_RUNNER_NEBULA_CONTROLLER_TOKEN과 짝 — 설정 시 모든 요청에 헤더 첨부 */
+    private readonly controllerToken: string | null = null,
+  ) {}
 
   async execute(action: DeviceAction): Promise<CommandOutcome> {
     const request = toControllerRequest(action);
+    const headers: Record<string, string> = { 'content-type': 'application/json' };
+    if (this.controllerToken) headers['x-nebula-token'] = this.controllerToken;
     try {
       const response = await fetch(`${this.baseUrl}${request.path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers,
         body: JSON.stringify(request.body),
         signal: AbortSignal.timeout(CONTROLLER_TIMEOUT_MS),
       });

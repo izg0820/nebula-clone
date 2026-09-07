@@ -19,6 +19,8 @@ export interface AgentConfig {
   readonly supervisor: SupervisorEnvConfig | null;
   /** mirror-helper 바이너리 경로 — 미지정 시 미러링 비활성 (H.264 단일 방식) */
   readonly mirrorHelperPath: string | null;
+  /** Controller HTTP 토큰 — 러너(TEST_RUNNER_...)와 클라이언트 헤더에 함께 배선 */
+  readonly controllerToken: string | null;
 }
 
 /** 수퍼바이저 환경 설정 */
@@ -167,5 +169,16 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
     staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
     supervisor: parseSupervisorConfig(env),
     mirrorHelperPath: env.NEBULA_MIRROR_HELPER ?? null,
+    controllerToken: parseControllerToken(env.NEBULA_CONTROLLER_TOKEN),
   };
+}
+
+/** Controller 토큰 — 빈 값은 미설정 취급, 설정 시 서버 토큰과 같은 최소 길이 강제 */
+function parseControllerToken(raw: string | undefined): string | null {
+  const trimmed = raw?.trim() ?? '';
+  if (trimmed.length === 0) return null;
+  if (trimmed.length < MIN_TOKEN_LENGTH) {
+    throw new Error(`NEBULA_CONTROLLER_TOKEN은 ${MIN_TOKEN_LENGTH}자 이상이어야 함`);
+  }
+  return trimmed;
 }

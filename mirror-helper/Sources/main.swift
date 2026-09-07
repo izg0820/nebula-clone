@@ -10,7 +10,7 @@ import Foundation
 ///
 /// 사용:
 ///   mirror-helper --list             # 캡처 가능한 iOS 기기 나열
-///   mirror-helper --udid <UDID>      # 해당 기기 스트림 시작
+///   mirror-helper --name <기기이름>   # 해당 기기 스트림 시작 (미지정 시 첫 muxed 장치)
 ///
 /// 출력 프레임 형식 (stdout, 바이너리):
 ///   [UInt32 BE payload 길이][UInt8 키프레임 여부(1/0)][Annex-B H.264 access unit]
@@ -219,7 +219,20 @@ func argumentValue(_ flag: String) -> String? {
     return arguments[index + 1]
 }
 
+// 플래그는 있는데 값이 없으면 "첫 장치"로 조용히 넘어가 다른 기기를 스트리밍할 수 있음 — 즉시 실패
+if arguments.contains("--name"), argumentValue("--name") == nil {
+    log("--name 플래그에 기기 이름이 없음 — 사용법: mirror-helper --name <기기이름>")
+    exit(2)
+}
 let deviceName = argumentValue("--name")
+
+// 데몬 환경이라 권한 프롬프트에 응답할 GUI가 없음 — 미허용이면 명시적으로 실패
+// (미확인 시 캡처 세션은 "시작"까지 성공하고 프레임만 안 오는 무음 프리즈가 됨)
+let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+if cameraStatus != .authorized {
+    log("카메라 권한 없음 (status=\(cameraStatus.rawValue)) — 시스템 설정에서 허용 후 재실행")
+    exit(2)
+}
 
 enableScreenCaptureDevices()
 log("기기 검색 중: \(deviceName ?? "(첫 번째 muxed 장치)")")
@@ -231,8 +244,9 @@ log("캡처 장치 발견: \(device.localizedName) (\(device.uniqueID))")
 
 let streamer = DeviceStreamer(device: device)
 
-signal(SIGTERM) { _ in exit(0) }
-signal(SIGINT) { _ in exit(0) }
+// 시그널 핸들러에서 exit()는 async-signal-safe가 아님 (atexit·stdio 플러시 중 데드락 가능)
+signal(SIGTERM) { _ in _exit(0) }
+signal(SIGINT) { _ in _exit(0) }
 
 do {
     try streamer.start()

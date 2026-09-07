@@ -3,8 +3,20 @@ import { PublicDevice } from './api';
 interface DeviceCardProps {
   readonly device: PublicDevice;
   readonly isMine: boolean;
+  /** 이미 다른 기기를 점유 중 — 새 점유 시 기존 occupantId가 덮여 기기가 잠기므로 차단 */
+  readonly hasOtherOccupation: boolean;
   readonly onOccupy: (deviceId: string) => void;
   readonly onRelease: () => void;
+}
+
+function cardClassName(isMine: boolean): string {
+  if (isMine) return 'device-card active';
+  return 'device-card';
+}
+
+function occupyHint(hasOtherOccupation: boolean): string | undefined {
+  if (hasOtherOccupation) return '점유 중인 기기를 먼저 해제하세요';
+  return undefined;
 }
 
 /** 상태 도트 색 — online+ready 초록, online 준비중 노랑, offline 회색 */
@@ -14,12 +26,12 @@ function dotColor(device: PublicDevice): string {
   return 'amber';
 }
 
-export function DeviceCard({ device, isMine, onOccupy, onRelease }: DeviceCardProps) {
+export function DeviceCard({ device, isMine, hasOtherOccupation, onOccupy, onRelease }: DeviceCardProps) {
   const isReady = device.tags.includes('controller-ready');
-  const canOccupy = device.status === 'online' && !device.isOccupied;
+  const canOccupy = device.status === 'online' && !device.isOccupied && !hasOtherOccupation;
 
   return (
-    <div className={isMine ? 'device-card active' : 'device-card'}>
+    <div className={cardClassName(isMine)}>
       <div className="name-row">
         <span className={`dot ${dotColor(device)}`} />
         <span className="name">{device.name}</span>
@@ -39,7 +51,12 @@ export function DeviceCard({ device, isMine, onOccupy, onRelease }: DeviceCardPr
           ))}
       </div>
       {!isMine && (
-        <button className="btn primary" disabled={!canOccupy} onClick={() => onOccupy(device.id)}>
+        <button
+          className="btn primary"
+          disabled={!canOccupy}
+          title={occupyHint(hasOtherOccupation)}
+          onClick={() => onOccupy(device.id)}
+        >
           점유
         </button>
       )}

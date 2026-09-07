@@ -60,7 +60,7 @@ export function encodeAgentFrame(frame: AgentFrame): Uint8Array {
   out.set(idBytes, offset);
   offset += idBytes.length;
   out[offset] = frame.format;
-  out[offset + 1] = frame.isKey ? 1 : 0;
+  out[offset + 1] = Number(frame.isKey);
   view.setUint16(offset + 2, frame.width);
   view.setUint16(offset + 4, frame.height);
   view.setUint32(offset + 6, frame.stampMs >>> 0);
@@ -94,7 +94,7 @@ export function encodeViewerFrame(frame: ViewerFrame): Uint8Array {
   const out = new Uint8Array(10 + frame.payload.length);
   const view = new DataView(out.buffer);
   out[0] = frame.format;
-  out[1] = frame.isKey ? 1 : 0;
+  out[1] = Number(frame.isKey);
   view.setUint16(2, frame.width);
   view.setUint16(4, frame.height);
   view.setUint32(6, frame.stampMs >>> 0);

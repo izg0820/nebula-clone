@@ -15,7 +15,9 @@ XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스�
 | `POST /screenshot` | — | `{"ok":true, "jpegBase64":"...", "widthPt":430, "heightPt":932}` |
 
 - 서버는 **루프백(127.0.0.1) 전용 바인딩** — LAN 노출 없음, usbmuxd(USB) 포워딩으로만 접근
-- `TEST_RUNNER_NEBULA_CONTROLLER_TOKEN` 설정 시 모든 요청에 `x-nebula-token` 헤더 필수 (불일치 401)
+- `TEST_RUNNER_NEBULA_CONTROLLER_TOKEN` 설정 시 모든 요청에 `x-nebula-token` 헤더 필수 (불일치 401).
+  Agent를 쓸 때는 러너에 직접 설정하지 말고 **Agent의 `NEBULA_CONTROLLER_TOKEN`** 을 설정할 것 —
+  Agent가 러너 env 주입과 요청 헤더를 함께 배선함 (러너에만 설정하면 헬스체크 401 → 재기동 루프)
 - 필드 검증 실패는 400, 미지원 경로는 404
 
 ## 빌드·실행 (맥미니에서)
