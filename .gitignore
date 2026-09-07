@@ -8,3 +8,5 @@ coverage/
 .nx/cache
 .nx/workspace-data
 .idea/
+controller-ios/NebulaController.xcodeproj/
+controller-ios/Host/Info.plist
