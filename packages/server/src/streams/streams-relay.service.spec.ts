@@ -6,10 +6,16 @@ import { StreamsRelayService } from './streams-relay.service';
 class FakeViewer {
   readonly OPEN = 1;
   readyState = 1;
+  bufferedAmount = 0;
+  isTerminated = false;
   sent: Uint8Array[] = [];
 
   send(payload: Uint8Array): void {
     this.sent.push(payload);
+  }
+
+  terminate(): void {
+    this.isTerminated = true;
   }
 }
 
@@ -60,6 +66,48 @@ describe('StreamsRelayService', () => {
 
     expect(first.sent).toHaveLength(0);
     expect(second.sent).toHaveLength(1);
+  });
+
+  test('송신 큐가 밀린 시청자에겐 비키프레임 드롭, 키프레임은 전달', () => {
+    const relay = new StreamsRelayService();
+    const congested = new FakeViewer();
+    congested.bufferedAmount = 3 * 1024 * 1024;
+    relay.addViewer('u1', congested as unknown as WebSocket);
+
+    const frame = {
+      deviceId: 'u1',
+      format: FRAME_FORMAT_H264,
+      width: 644,
+      height: 1398,
+      stampMs: 0,
+      payload: new Uint8Array([0x01]),
+    };
+    relay.broadcast({ ...frame, isKey: false });
+    expect(congested.sent).toHaveLength(0);
+
+    relay.broadcast({ ...frame, isKey: true });
+    expect(congested.sent).toHaveLength(1);
+    expect(congested.isTerminated).toBe(false);
+  });
+
+  test('송신 누적이 축출 상한을 넘은 시청자는 terminate (half-open OOM 방지)', () => {
+    const relay = new StreamsRelayService();
+    const halfOpen = new FakeViewer();
+    halfOpen.bufferedAmount = 17 * 1024 * 1024;
+    relay.addViewer('u1', halfOpen as unknown as WebSocket);
+
+    relay.broadcast({
+      deviceId: 'u1',
+      format: FRAME_FORMAT_H264,
+      isKey: true,
+      width: 644,
+      height: 1398,
+      stampMs: 0,
+      payload: new Uint8Array([0x01]),
+    });
+
+    expect(halfOpen.isTerminated).toBe(true);
+    expect(halfOpen.sent).toHaveLength(0);
   });
 
   test('미등록 기기 removeViewer·broadcast는 무해', () => {

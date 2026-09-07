@@ -25,6 +25,15 @@ const STABLE_RESET_MS = 30_000;
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
 
+/**
+ * 프레임 백프레셔 — 소켓 송신 큐가 이 이상 밀리면 비키프레임 드롭.
+ * 드롭 지점이 없으면 업링크 정체 시 지연이 스스로 회복되지 않고 메모리만 쌓임
+ * (키프레임은 유지 — 디코더가 다음 IDR에서 재동기화)
+ */
+const FRAME_BACKPRESSURE_BYTES = 512 * 1024;
+/** 드롭 관측 로그 주기 */
+const DROP_LOG_INTERVAL = 100;
+
 /** 재시도로 복구 불가능한 서버 close 코드 (설정·운영 오류) */
 const TERMINAL_CLOSE_CODES: Record<number, string> = {
   4400: 'agentId 형식 위반',
@@ -70,6 +79,8 @@ export class ServerTunnel {
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
   private readonly stableResetMs: number;
+  /** 백프레셔로 드롭한 프레임 누계 (관측용) */
+  private droppedFrameCount = 0;
 
   constructor(
     private readonly config: AgentConfig,
@@ -138,9 +149,19 @@ export class ServerTunnel {
     return this.send(JSON.stringify(buildHeartbeatMessage(deviceIds)));
   }
 
-  /** 미러링 프레임 푸시 (바이너리) */
+  /** 미러링 프레임 푸시 (바이너리) — 업링크 정체 시 비키프레임 드롭 */
   sendFrame(frame: AgentFrame): boolean {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
+    if (!frame.isKey && this.socket.bufferedAmount > FRAME_BACKPRESSURE_BYTES) {
+      this.droppedFrameCount += 1;
+      if (this.droppedFrameCount % DROP_LOG_INTERVAL === 1) {
+        logger.warn(
+          { dropped: this.droppedFrameCount, buffered: this.socket.bufferedAmount },
+          '업링크 정체 — 비키프레임 드롭 중',
+        );
+      }
+      return false;
+    }
     this.socket.send(encodeAgentFrame(frame));
     return true;
   }
