@@ -23,6 +23,7 @@ XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스�
 ```bash
 brew install xcodegen
 cd controller-ios
+cp local.yml.example local.yml             # DEVELOPMENT_TEAM에 본인 Team ID 기입 (미추적 파일)
 xcodegen generate                          # NebulaController.xcodeproj 생성
 open NebulaController.xcodeproj            # 최초 1회: Signing에서 Personal Team 지정
 

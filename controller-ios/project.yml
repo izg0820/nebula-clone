@@ -1,6 +1,10 @@
 # XcodeGen 프로젝트 정의 — `xcodegen generate`로 .xcodeproj 생성
 # (XCUITest는 순수 SPM으로 기기 실행이 불가해 Xcode 프로젝트 필요)
+# 서명 팀: local.yml(미추적)에 DEVELOPMENT_TEAM 지정 — local.yml.example 참고
 name: NebulaController
+include:
+  - path: local.yml
+    optional: true
 options:
   bundleIdPrefix: dev.nebula
   deploymentTarget:
@@ -18,7 +22,6 @@ targets:
         CFBundleDisplayName: Nebula Host
     settings:
       base:
-        DEVELOPMENT_TEAM: YOUR_TEAM_ID
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
 
@@ -30,7 +33,6 @@ targets:
       - target: NebulaHost
     settings:
       base:
-        DEVELOPMENT_TEAM: YOUR_TEAM_ID
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
 

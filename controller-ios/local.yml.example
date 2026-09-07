@@ -1,0 +1,5 @@
+# 로컬 서명 설정 — local.yml로 복사 후 본인 Team ID 기입 (local.yml은 gitignore 대상)
+# Team ID 확인: Xcode > Settings > Accounts 또는 `security find-identity -v -p codesigning`
+settings:
+  base:
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID
