@@ -56,6 +56,7 @@ function isDeviceAction(value: unknown): value is DeviceAction {
     );
   }
   if (record.kind === 'typeText') return typeof record.text === 'string';
+  if (record.kind === 'screenshot') return true;
   return record.kind === 'uiDump';
 }
 
@@ -109,6 +110,12 @@ export function parseServerMessage(raw: string): ServerMessage | null {
       deviceId: message.deviceId,
       action: message.action,
     };
+  }
+  if (
+    (message.type === 'startStream' || message.type === 'stopStream') &&
+    typeof message.deviceId === 'string'
+  ) {
+    return { type: message.type, deviceId: message.deviceId };
   }
   return null;
 }

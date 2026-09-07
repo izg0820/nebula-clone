@@ -83,6 +83,17 @@ final class ControllerTests: XCTestCase {
             let bundleId = body["bundleId"] as? String
             return HttpResponse(status: 200, body: ["ok": true, "tree": actions.uiDump(bundleId: bundleId)])
         }
+        if path == "/screenshot" {
+            guard let result = actions.screenshot() else {
+                return HttpResponse(status: 500, body: ["ok": false, "error": "capture 실패"])
+            }
+            return HttpResponse(status: 200, body: [
+                "ok": true,
+                "jpegBase64": result.jpegBase64,
+                "widthPt": result.widthPt,
+                "heightPt": result.heightPt,
+            ])
+        }
         return HttpResponse(status: 404, body: ["ok": false, "error": "unknown path \(path)"])
     }
 

@@ -10,3 +10,4 @@ coverage/
 .idea/
 controller-ios/NebulaController.xcodeproj/
 controller-ios/Host/Info.plist
+mirror-helper/.build/

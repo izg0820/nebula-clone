@@ -77,6 +77,13 @@ describe('SqliteDevicesRepository', () => {
     expect(repository.tryOccupy({ tags: ['smoke'] }, 'o2', NOW)).not.toBeNull();
   });
 
+  test('tryOccupy는 deviceId 지정 시 해당 기기만 점유', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+
+    expect(repository.tryOccupy({ deviceId: '다른-기기' }, 'o1', NOW)).toBeNull();
+    expect(repository.tryOccupy({ deviceId: iphone.id }, 'o2', NOW)?.id).toBe(iphone.id);
+  });
+
   test('tryOccupy는 offline 기기를 제외', () => {
     repository.upsertMany([iphone], AGENT_ID, NOW);
     repository.markAgentOffline(AGENT_ID);

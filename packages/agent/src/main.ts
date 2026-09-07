@@ -7,6 +7,7 @@ import { discoverDevices, mergeWithStatic } from './device-discovery';
 import { DiscoveryState } from './discovery-state';
 import { logger } from './logger';
 import { ServerTunnel } from './server-tunnel';
+import { StreamManager } from './stream-manager';
 
 /** Controller 준비 상태 태그 — 서버에서 tags:["controller-ready"]로 점유 필터 가능 */
 const READY_TAG = 'controller-ready';
@@ -52,7 +53,15 @@ async function main(): Promise<void> {
       void discoverAndRegister();
     },
     onCommand: (command) => executor.execute(command),
+    onStreamControl: (deviceId, shouldStart) => {
+      if (shouldStart) {
+        streamManager.start(deviceId);
+        return;
+      }
+      streamManager.stop(deviceId);
+    },
   });
+  const streamManager = new StreamManager(resolver, (frame) => tunnel.sendFrame(frame));
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {
@@ -97,6 +106,7 @@ async function main(): Promise<void> {
     logger.info('Agent 종료');
     clearInterval(discoveryTimer);
     clearInterval(heartbeatTimer);
+    streamManager.stopAll();
     supervisor?.stopAll();
     tunnel.close();
     process.exit(0);

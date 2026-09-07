@@ -24,7 +24,17 @@ export interface UiDumpAction {
   readonly kind: 'uiDump';
 }
 
-export type DeviceAction = TapAction | SwipeAction | TypeTextAction | UiDumpAction;
+/** 화면 캡처 — 결과: { jpegBase64, widthPt, heightPt } (pt 크기는 클릭 좌표 환산용) */
+export interface ScreenshotAction {
+  readonly kind: 'screenshot';
+}
+
+export type DeviceAction =
+  | TapAction
+  | SwipeAction
+  | TypeTextAction
+  | UiDumpAction
+  | ScreenshotAction;
 
 /** 명령 실행 결과 — 성공 시 result, 실패 시 error */
 export type CommandOutcome =

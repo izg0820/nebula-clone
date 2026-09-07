@@ -61,4 +61,16 @@ export class CommandsController {
     });
     return { result };
   }
+
+  @ApiOperation({ summary: '화면 캡처 (JPEG base64 + pt 크기)' })
+  @Post('screenshot')
+  async screenshot(
+    @Param('id') deviceId: string,
+    @Body() dto: UiDumpDto,
+  ): Promise<CommandResponse> {
+    const result = await this.commandsService.execute(deviceId, dto.occupantId, {
+      kind: 'screenshot',
+    });
+    return { result };
+  }
 }

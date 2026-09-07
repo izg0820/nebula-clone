@@ -15,11 +15,12 @@
 ## 모노레포 구조 (Nx package-based + pnpm workspace)
 
 ```
-packages/server   # @nebula/server — NestJS 오케스트레이션 (Phase 1 + 명령 프록시)
-packages/agent    # @nebula/agent — 맥미니 데몬, plain TS — 프레임워크 금지
-packages/shared   # @nebula/shared — WS 프로토콜·액션 타입 단일 정의 (server/agent 공용)
-packages/web      # React 콘솔 (예정)
-controller-ios/   # Swift/XCUITest + XcodeGen — pnpm workspace 밖 (빌드 미검증)
+packages/server   # @nebula/server — NestJS 오케스트레이션 (명령 프록시 + 스트림 릴레이)
+packages/agent    # @nebula/agent — 맥 데몬: 발견·터널·수퍼바이저·스트림 캡처 (프레임워크 금지)
+packages/shared   # @nebula/shared — WS 프로토콜·액션·프레임 코덱 (server/agent/web 공용)
+packages/web      # @nebula/web — React 콘솔 (기기 목록·점유·미러링 뷰·클릭 탭)
+controller-ios/   # Swift/XCUITest + XcodeGen — 실기기 검증 완료
+mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보류 (README 참고)
 ```
 
 - Nx는 package-based 모드 — `project.json` 만들지 말 것. 각 패키지 `package.json` 스크립트가 태스크
@@ -96,8 +97,16 @@ controller-ios/   # Swift/XCUITest + XcodeGen — pnpm workspace 밖 (빌드 미
   미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
 - **알려진 이슈**: 점유 TTL 없음 — 점유자(occupantId 분실) 사라지면 기기가 잠김, 러너 재기동과
   무관하게 유지됨. Phase 4 점유 만료 처리로 해결 예정 (실사용에서 실제로 겪음)
+- **Phase 3 완료 (푸시 스트리밍)**: 시청자 WS `/stream?deviceId&token` → StreamsRelay가
+  시청자 0↔1 전환 시 Agent에 start/stopStream 지시 → Agent StreamManager가 연속 캡처,
+  바이너리 프레임([frame-codec])을 터널로 푸시. 실측 3.5fps/169KB (XCUIScreen 캡처가 병목).
+  **macOS 26 중요 발견**: 원문의 캡처 장치(DAL) 방식은 QuickTime조차 불가 — OS에서 제거됨.
+  mirror-helper/ 에 시도 코드·근거 보존 (구버전 macOS 호스트에서 재시도 가치 있음)
+- **실기기 연결 참고**: devicectl·usbmuxd·XCUITest는 Wi-Fi로도 동작 (실제로 무선으로 전 파이프라인
+  동작 확인됨). 단 미러링 캡처 장치는 USB 필수였음
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,
-  토큰 쿼리스트링 허용, supertest e2e 부재, WS maxPayload 미설정, agentId 정규화 충돌
+  Controller HTTP 직렬 큐 head-of-line(캡처 중 /health 지연 → 수퍼바이저 오탐 재기동 가능),
+  스크린샷 인코딩이 러너 메인 스레드 점유, 점유 TTL 부재, 웹 컴포넌트 테스트 환경(jsdom) 부재
 
 ## 이 프로젝트만의 주의
 

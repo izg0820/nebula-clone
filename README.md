@@ -141,8 +141,11 @@ pnpm build && pnpm start
       `NEBULA_XCODEBUILD_ENABLED=true`면 Agent가 기기별 러너·iproxy를 자동 기동, 10초 헬스 폴링,
       죽으면 백오프 재기동(강제 kill → 2초 후 복구 실측). 준비된 기기는 `controller-ready` 태그로
       점유 필터 가능. 남은 것: 7일 재서명 자동화 검증(시간 경과 필요)
-- [ ] **Phase 3 — 미러링**: ①스크린샷 MJPEG로 먼저 화면 확보 → ②AVFoundation H.264로 교체,
-      웹 콘솔에서 보면서 조작
+- [x] **Phase 3 — 미러링 (푸시 스트리밍)**: 웹 콘솔에서 보면서 조작 실기기 검증 완료 (2026-09-07).
+      시청자 WS(`/stream`) 접속 시 Agent가 XCUITest 스크린샷을 연속 캡처해 터널로 바이너리 푸시,
+      서버가 시청자들에게 릴레이 — 3.5fps/169KB, 시청자 0명이면 자동 중지.
+      ⚠ 원문의 H.264 캡처 장치 방식은 **macOS 26에서 OS 경로 제거로 불가 판정**
+      (QuickTime도 불가 — mirror-helper/README.md에 실측 근거·재검토 조건 기록)
 - [ ] **Phase 4 — 확장**: CLI/SDK (생성된 OpenAPI 스펙에서 클라이언트 생성), 프로세스 자동 복구,
       점유 만료(타임아웃) 처리
 

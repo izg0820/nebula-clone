@@ -1,10 +1,12 @@
 import WebSocket from 'ws';
 import {
+  AgentFrame,
   buildCommandResultMessage,
   buildHeartbeatMessage,
   buildRegisterMessage,
   CommandMessage,
   CommandOutcome,
+  encodeAgentFrame,
   parseServerMessage,
   RegisterDeviceInput,
 } from '@nebula/shared';
@@ -39,6 +41,8 @@ export interface TunnelCallbacks {
   readonly onOpen: () => void;
   /** 서버 명령 수신 시 — 실행 결과를 반환하면 터널이 commandResult로 회신 */
   readonly onCommand?: (command: CommandMessage) => Promise<CommandOutcome>;
+  /** 미러링 스트림 시작/중지 지시 */
+  readonly onStreamControl?: (deviceId: string, shouldStart: boolean) => void;
 }
 
 /** 테스트용 타이밍 오버라이드 */
@@ -130,6 +134,13 @@ export class ServerTunnel {
     return this.send(JSON.stringify(buildHeartbeatMessage(deviceIds)));
   }
 
+  /** 미러링 프레임 푸시 (바이너리) */
+  sendFrame(frame: AgentFrame): boolean {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
+    this.socket.send(encodeAgentFrame(frame));
+    return true;
+  }
+
   /** 종료 — 재연결·keepalive 중단 후 소켓 닫기 */
   close(): void {
     this.isClosed = true;
@@ -143,6 +154,10 @@ export class ServerTunnel {
     const message = parseServerMessage(raw);
     if (!message) {
       logger.warn('잘못된 서버 메시지 무시');
+      return;
+    }
+    if (message.type === 'startStream' || message.type === 'stopStream') {
+      this.callbacks.onStreamControl?.(message.deviceId, message.type === 'startStream');
       return;
     }
     if (!this.callbacks.onCommand) {

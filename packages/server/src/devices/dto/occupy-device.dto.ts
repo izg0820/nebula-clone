@@ -14,4 +14,9 @@ export class OccupyDeviceDto {
   @IsArray()
   @IsString({ each: true })
   tags?: string[];
+
+  @ApiPropertyOptional({ description: '특정 기기 지정 점유 (UDID)' })
+  @IsOptional()
+  @IsString()
+  deviceId?: string;
 }

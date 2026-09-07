@@ -33,7 +33,20 @@ export interface CommandMessage {
   readonly action: DeviceAction;
 }
 
-export type ServerMessage = CommandMessage;
+/** 미러링 스트림 시작 — 첫 시청자 진입 시 서버가 지시 */
+export interface StartStreamMessage {
+  readonly type: 'startStream';
+  readonly deviceId: string;
+}
+
+/** 미러링 스트림 중지 — 마지막 시청자 퇴장 시 서버가 지시 */
+export interface StopStreamMessage {
+  readonly type: 'stopStream';
+  readonly deviceId: string;
+}
+
+export type StreamControlMessage = StartStreamMessage | StopStreamMessage;
+export type ServerMessage = CommandMessage | StreamControlMessage;
 
 // ── 빌더 ─────────────────────────────────────────────────
 
@@ -58,4 +71,12 @@ export function buildCommandResultMessage(
   outcome: CommandOutcome,
 ): CommandResultMessage {
   return { type: 'commandResult', requestId, outcome };
+}
+
+export function buildStreamControlMessage(
+  shouldStart: boolean,
+  deviceId: string,
+): StreamControlMessage {
+  if (shouldStart) return { type: 'startStream', deviceId };
+  return { type: 'stopStream', deviceId };
 }

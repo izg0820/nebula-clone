@@ -1,4 +1,12 @@
+import UIKit
 import XCTest
+
+/** 화면 캡처 결과 — pt 크기는 웹 콘솔의 클릭 → 탭 좌표 환산용 */
+struct ScreenshotResult {
+    let jpegBase64: String
+    let widthPt: Double
+    let heightPt: Double
+}
 
 /// XCUITest 기반 기기 조작 — 세션 없음, 상시 대기
 /// 좌표계는 화면 포인트(pt) 기준. 스프링보드를 기준 앱으로 잡아 시스템 전역 좌표 탭 구현
@@ -35,6 +43,19 @@ final class ActionHandler {
             return springboard.debugDescription
         }
         return XCUIApplication(bundleIdentifier: bundleId).debugDescription
+    }
+
+    /// 화면 캡처 → JPEG (스크린샷 폴링 미러링 v0 — 원문이 "슬라이드쇼"라 부른 방식)
+    func screenshot() -> ScreenshotResult? {
+        let capture = XCUIScreen.main.screenshot()
+        let image = capture.image
+        // 0.35: 미러링 스트림 대역폭 절충 — 원격(오라클 경유) 시청 대비 프레임 크기 우선
+        guard let jpeg = image.jpegData(compressionQuality: 0.35) else { return nil }
+        return ScreenshotResult(
+            jpegBase64: jpeg.base64EncodedString(),
+            widthPt: Double(image.size.width),
+            heightPt: Double(image.size.height)
+        )
     }
 
     private func coordinate(x: Double, y: Double) -> XCUICoordinate {

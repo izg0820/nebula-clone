@@ -37,6 +37,8 @@ export function toPublicDevice(device: Device): PublicDevice {
 export interface OccupyFilter {
   readonly platform?: DevicePlatform;
   readonly tags?: readonly string[];
+  /** 특정 기기 지정 점유 (웹 콘솔용) */
+  readonly deviceId?: string;
 }
 
 /** 해제 결과 */

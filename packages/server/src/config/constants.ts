@@ -17,3 +17,12 @@ export const RATE_LIMIT_PER_MINUTE = 120;
 
 /** 기기 명령 응답 대기 상한 (ms) — 초과 시 클라이언트에 504 */
 export const COMMAND_TIMEOUT_MS = 15_000;
+
+/** 미러링 시청자 WS 경로 */
+export const STREAM_WS_PATH = '/stream';
+
+/** Agent 터널 메시지 상한 — 프레임(수백 KB)+여유. 손상·악성 Agent의 메모리 압박 방지 */
+export const AGENT_WS_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
+
+/** 시청자는 수신 전용 — 보내는 메시지가 없어야 정상 */
+export const VIEWER_WS_MAX_PAYLOAD_BYTES = 16 * 1024;

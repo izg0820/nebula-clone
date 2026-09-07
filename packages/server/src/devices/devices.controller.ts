@@ -27,7 +27,11 @@ export class DevicesController {
   @ApiOperation({ summary: '조건에 맞는 기기 1대 점유' })
   @Post('occupy')
   occupy(@Body() dto: OccupyDeviceDto): OccupyResponse {
-    const result = this.devicesService.occupy({ platform: dto.platform, tags: dto.tags });
+    const result = this.devicesService.occupy({
+      platform: dto.platform,
+      tags: dto.tags,
+      deviceId: dto.deviceId,
+    });
     return { occupantId: result.occupantId, device: toPublicDevice(result.device) };
   }
 

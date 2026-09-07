@@ -73,6 +73,10 @@ describe('parseServerMessage', () => {
     ).not.toBeNull();
 
     expect(parseServerMessage(JSON.stringify({ ...base, action: { kind: 'uiDump' } }))).not.toBeNull();
+
+    expect(
+      parseServerMessage(JSON.stringify({ ...base, action: { kind: 'screenshot' } })),
+    ).not.toBeNull();
   });
 
   test('필드 누락·비유한 좌표는 null', () => {

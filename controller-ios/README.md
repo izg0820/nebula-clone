@@ -12,6 +12,7 @@ XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스�
 | `POST /swipe` | `{fromX, fromY, toX, toY, durationMs}` | `{"ok":true}` |
 | `POST /type` | `{text}` (4000자 이하) | `{"ok":true}` |
 | `POST /ui` | `{bundleId?}` — 전면 앱 트리를 얻으려면 bundleId 필수 | `{"ok":true, "tree":"..."}` |
+| `POST /screenshot` | — | `{"ok":true, "jpegBase64":"...", "widthPt":430, "heightPt":932}` |
 
 - 서버는 **루프백(127.0.0.1) 전용 바인딩** — LAN 노출 없음, usbmuxd(USB) 포워딩으로만 접근
 - `TEST_RUNNER_NEBULA_CONTROLLER_TOKEN` 설정 시 모든 요청에 `x-nebula-token` 헤더 필수 (불일치 401)

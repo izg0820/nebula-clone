@@ -2,7 +2,9 @@ import { ConfigService } from '@nestjs/config';
 import type { IncomingMessage } from 'http';
 import { EventEmitter } from 'events';
 import type { WebSocket } from 'ws';
+import { encodeAgentFrame } from '@nebula/shared';
 import { DevicesService } from '../devices/devices.service';
+import { StreamsRelayService } from '../streams/streams-relay.service';
 import { AgentNotConnectedError, AgentsGateway } from './agents.gateway';
 
 /** close·send 호출을 기록하는 목 소켓 */
@@ -26,16 +28,41 @@ interface DevicesServiceMock {
   registerFromAgent: jest.Mock;
   recordHeartbeat: jest.Mock;
   handleAgentDisconnect: jest.Mock;
+  getById: jest.Mock;
 }
 
-function createGateway(): { gateway: AgentsGateway; service: DevicesServiceMock } {
+interface RelayMock {
+  setControlHandler: jest.Mock;
+  broadcast: jest.Mock;
+  devicesWithViewers: jest.Mock;
+}
+
+function createGateway(): {
+  gateway: AgentsGateway;
+  service: DevicesServiceMock;
+  relay: RelayMock;
+} {
   const config = { get: () => 'agent-token' } as unknown as ConfigService;
   const service: DevicesServiceMock = {
     registerFromAgent: jest.fn(),
     recordHeartbeat: jest.fn(),
     handleAgentDisconnect: jest.fn(),
+    getById: jest.fn().mockReturnValue({ agentId: 'agent-1' }),
   };
-  return { gateway: new AgentsGateway(config, service as unknown as DevicesService), service };
+  const relay: RelayMock = {
+    setControlHandler: jest.fn(),
+    broadcast: jest.fn(),
+    devicesWithViewers: jest.fn().mockReturnValue([]),
+  };
+  return {
+    gateway: new AgentsGateway(
+      config,
+      service as unknown as DevicesService,
+      relay as unknown as StreamsRelayService,
+    ),
+    service,
+    relay,
+  };
 }
 
 function createRequest(url: string): IncomingMessage {
@@ -262,6 +289,49 @@ describe('AgentsGateway', () => {
     await expect(gateway.sendCommand('없는-agent', 'udid-1', { kind: 'uiDump' })).rejects.toThrow(
       AgentNotConnectedError,
     );
+  });
+
+  test('바이너리 프레임은 릴레이로 브로드캐스트', () => {
+    const { gateway, relay } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const frame = encodeAgentFrame({
+      deviceId: 'udid-1',
+      widthPt: 430,
+      heightPt: 932,
+      jpeg: new Uint8Array([0xff, 0xd8]),
+    });
+    socket.emit('message', Buffer.from(frame), true);
+
+    expect(relay.broadcast).toHaveBeenCalledWith('udid-1', 430, 932, expect.any(Uint8Array));
+  });
+
+  test('시청자 있는 기기는 register 시 스트림 재개 지시', () => {
+    const { gateway, relay } = createGateway();
+    relay.devicesWithViewers.mockReturnValue(['udid-1']);
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'register',
+        devices: [{ id: 'udid-1', name: 'iPhone', platform: 'ios', osVersion: '17.5', tags: [] }],
+      }),
+      false,
+    );
+
+    const streamMessages = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'startStream');
+    expect(streamMessages).toEqual([{ type: 'startStream', deviceId: 'udid-1' }]);
   });
 
   test('인증 실패한 소켓의 disconnect는 아무것도 하지 않음', () => {

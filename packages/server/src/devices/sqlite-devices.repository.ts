@@ -110,6 +110,7 @@ export class SqliteDevicesRepository implements DevicesRepository {
         .map(toDevice)
         .find(
           (device) =>
+            (!filter.deviceId || device.id === filter.deviceId) &&
             (!filter.platform || device.platform === filter.platform) &&
             hasAllTags(device.tags, filter.tags ?? []),
         );

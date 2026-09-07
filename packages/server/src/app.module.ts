@@ -11,6 +11,7 @@ import { validateEnv } from './config/env.validation';
 import { DevicesModule } from './devices/devices.module';
 import { HealthController } from './health/health.controller';
 import { StorageModule } from './storage/storage.module';
+import { StreamsModule } from './streams/streams.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { StorageModule } from './storage/storage.module';
     DevicesModule,
     AgentsModule,
     CommandsModule,
+    StreamsModule,
   ],
   controllers: [HealthController],
   providers: [
