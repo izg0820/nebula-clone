@@ -1,0 +1,243 @@
+/* Nebula Console — 토스 스타일 디자인 토큰
+   팔레트: Toss 그레이 스케일 + Toss Blue(#3182f6), 큰 라운드·부드러운 그림자·볼드 타이포 */
+:root {
+  --bg: #f2f4f6;
+  --card: #ffffff;
+  --line: #f2f4f6;
+  --text: #191f28;
+  --text-2: #4e5968;
+  --muted: #8b95a1;
+  --blue: #3182f6;
+  --blue-dark: #1b64da;
+  --blue-soft: #e8f3ff;
+  --green: #00c471;
+  --green-soft: #e5f9f0;
+  --amber: #ff9f0a;
+  --amber-soft: #fff3e0;
+  --red: #f04452;
+  --radius: 20px;
+  --radius-sm: 12px;
+  --shadow: 0 1px 4px rgba(2, 32, 71, 0.05), 0 8px 24px rgba(2, 32, 71, 0.06);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo',
+    'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 레이아웃 ─────────────────────────────── */
+.app { display: flex; flex-direction: column; height: 100%; }
+
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 0 28px;
+  height: 60px;
+  align-items: center;
+  background: var(--card);
+  box-shadow: 0 1px 0 rgba(2, 32, 71, 0.04);
+  flex-shrink: 0;
+  z-index: 1;
+}
+.header .logo { font-size: 19px; font-weight: 800; letter-spacing: -0.3px; }
+.header .logo span { color: var(--blue); }
+.header .tagline { color: var(--muted); font-size: 13px; font-weight: 500; }
+
+.body { display: flex; flex: 1; min-height: 0; }
+
+.sidebar {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 20px 0 20px 20px;
+  gap: 16px;
+}
+.sidebar .device-list {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+}
+.sidebar .section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 0 2px 14px;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  min-width: 0;
+  overflow: auto;
+}
+
+/* ── 기기 카드 ─────────────────────────────── */
+.device-card {
+  background: var(--card);
+  border: 1.5px solid var(--line);
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 12px;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.device-card:hover { border-color: #dfe4ea; }
+.device-card.active { border-color: var(--blue); background: #fbfdff; }
+.device-card .name-row { display: flex; align-items: center; gap: 8px; }
+.device-card .name { font-weight: 700; font-size: 16px; letter-spacing: -0.2px; }
+.device-card .meta { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+.device-card .badges { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot.green { background: var(--green); }
+.dot.amber { background: var(--amber); }
+.dot.gray { background: #d1d6db; }
+
+.badge {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-2);
+}
+.badge.ready { background: var(--green-soft); color: #00a35e; }
+.badge.occupied { background: var(--amber-soft); color: #d97706; }
+
+/* ── 버튼·입력 ─────────────────────────────── */
+.btn {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  padding: 9px 18px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--bg);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:hover:not(:disabled) { background: #e8ebee; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.primary { background: var(--blue); color: #fff; }
+.btn.primary:hover:not(:disabled) { background: var(--blue-dark); }
+.btn.danger { background: #fdecee; color: var(--red); }
+.btn.danger:hover:not(:disabled) { background: #fbdce0; }
+
+.field { margin-bottom: 12px; }
+.field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.input {
+  font: inherit;
+  font-size: 14px;
+  width: 100%;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1.5px solid var(--line);
+  background: var(--bg);
+  color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+.input::placeholder { color: #b0b8c1; }
+.input:focus { outline: none; border-color: var(--blue); background: var(--card); }
+
+/* ── 설정 패널 ─────────────────────────────── */
+.settings {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 20px;
+  flex-shrink: 0;
+}
+.settings .section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  margin: 0 2px 14px;
+}
+
+/* ── 스크린 패널 ───────────────────────────── */
+.screen-panel { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+
+.screen-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 480px;
+  background: var(--card);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  padding: 12px 16px;
+}
+.screen-toolbar .device-name { font-weight: 700; font-size: 15px; }
+.screen-toolbar .spacer { flex: 1; }
+.fps-badge {
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #00a35e;
+  background: var(--green-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.phone-frame {
+  background: #101318;
+  border-radius: 34px;
+  padding: 13px;
+  box-shadow: 0 24px 60px rgba(2, 32, 71, 0.22);
+}
+.phone-frame canvas,
+.phone-frame img {
+  display: block;
+  max-height: 72vh;
+  max-width: 100%;
+  border-radius: 22px;
+  cursor: crosshair;
+}
+
+.type-row { display: flex; gap: 8px; width: 100%; max-width: 480px; }
+.type-row .input { flex: 1; background: var(--card); }
+
+.placeholder { color: var(--muted); text-align: center; }
+.placeholder .big {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text);
+  letter-spacing: -0.3px;
+}
+
+.status-line {
+  min-height: 24px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--red);
+  padding: 4px 28px 8px;
+  flex-shrink: 0;
+}

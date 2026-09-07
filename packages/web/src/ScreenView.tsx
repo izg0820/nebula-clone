@@ -8,10 +8,12 @@ interface ScreenViewProps {
   readonly serverUrl: string;
   readonly token: string;
   readonly deviceId: string;
+  readonly deviceName: string;
   readonly occupantId: string;
   readonly onError: (message: string) => void;
   /** 점유가 서버에서 무효(403 등)로 판명됐을 때 — 세션 정리용 */
   readonly onOccupationLost: () => void;
+  readonly onRelease: () => void;
 }
 
 /** http(s) → ws(s) 스킴 변환 */
@@ -97,9 +99,11 @@ export function ScreenView({
   serverUrl,
   token,
   deviceId,
+  deviceName,
   occupantId,
   onError,
   onOccupationLost,
+  onRelease,
 }: ScreenViewProps) {
   const [jpegUrl, setJpegUrl] = useState<string | null>(null);
   const [isVideoMode, setIsVideoMode] = useState(false);
@@ -107,8 +111,19 @@ export function ScreenView({
   /** 탭 좌표 환산용 pt 크기 — JPEG 프레임 헤더 또는 점유 직후 스크린샷 1회로 확보 */
   const [screenPt, setScreenPt] = useState<ScreenSize | null>(null);
   const [text, setText] = useState('');
+  const [fps, setFps] = useState(0);
+  const frameCountRef = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+
+  // 실시간 fps 표시 — 1초 창 프레임 카운트
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFps(frameCountRef.current);
+      frameCountRef.current = 0;
+    }, 1_000);
+    return () => clearInterval(timer);
+  }, []);
 
   /** 403 = 점유가 서버에서 사라짐 — 재시도 대신 세션 정리 */
   const handleActionError = useCallback(
@@ -152,6 +167,7 @@ export function ScreenView({
       if (!isActive) return;
       const frame = decodeViewerFrame(new Uint8Array(event.data));
       if (!frame) return;
+      frameCountRef.current += 1;
 
       if (frame.format === FRAME_FORMAT_H264) {
         setIsVideoMode(true);
@@ -216,33 +232,50 @@ export function ScreenView({
       .catch((error: unknown) => handleActionError('입력 실패', error));
   }, [api, deviceId, occupantId, text, handleActionError]);
 
-  const viewStyle: React.CSSProperties = {
-    maxHeight: '80vh',
-    maxWidth: '100%',
-    cursor: 'crosshair',
-    border: '1px solid #ccc',
-    boxSizing: 'content-box',
-  };
+  /** 비디오 모드일 때만 캔버스 표시 (숨겨도 ref는 유지) */
+  function canvasDisplay(): 'block' | 'none' {
+    if (isVideoMode && hasFrame) return 'block';
+    return 'none';
+  }
 
   return (
-    <div>
-      {!hasFrame && <p>스트림 연결 중… (러너 준비·첫 프레임 대기)</p>}
-      <canvas
-        ref={canvasRef}
-        onClick={handleClick}
-        style={{ ...viewStyle, display: isVideoMode && hasFrame ? 'block' : 'none' }}
-      />
-      {!isVideoMode && jpegUrl && (
-        <img ref={imgRef} src={jpegUrl} alt="기기 화면" onClick={handleClick} style={viewStyle} />
+    <div className="screen-panel">
+      <div className="screen-toolbar">
+        <span className="dot green" />
+        <span className="device-name">{deviceName}</span>
+        {hasFrame && <span className="fps-badge">{fps} fps</span>}
+        <span className="spacer" />
+        <button className="btn danger" onClick={onRelease}>
+          해제
+        </button>
+      </div>
+
+      {!hasFrame && (
+        <div className="placeholder">
+          <div className="big">스트림 연결 중…</div>
+          <div>러너 준비·첫 프레임 대기</div>
+        </div>
       )}
-      <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+      <div className="phone-frame" style={{ display: hasFrame ? 'block' : 'none' }}>
+        <canvas ref={canvasRef} onClick={handleClick} style={{ display: canvasDisplay() }} />
+        {!isVideoMode && jpegUrl && (
+          <img ref={imgRef} src={jpegUrl} alt="기기 화면" onClick={handleClick} />
+        )}
+      </div>
+
+      <div className="type-row">
         <input
+          className="input"
           value={text}
           onChange={(event) => setText(event.target.value)}
           placeholder="텍스트 입력 (기기에서 키보드 포커스 필요)"
-          style={{ flex: 1 }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') handleType();
+          }}
         />
-        <button onClick={handleType}>입력</button>
+        <button className="btn primary" onClick={handleType}>
+          입력
+        </button>
       </div>
     </div>
   );
