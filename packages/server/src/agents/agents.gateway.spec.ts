@@ -32,9 +32,7 @@ interface DevicesServiceMock {
 }
 
 interface RelayMock {
-  setControlHandler: jest.Mock;
   broadcast: jest.Mock;
-  devicesWithViewers: jest.Mock;
 }
 
 function createGateway(): {
@@ -50,9 +48,7 @@ function createGateway(): {
     getById: jest.fn().mockReturnValue({ agentId: 'agent-1' }),
   };
   const relay: RelayMock = {
-    setControlHandler: jest.fn(),
     broadcast: jest.fn(),
-    devicesWithViewers: jest.fn().mockReturnValue([]),
   };
   return {
     gateway: new AgentsGateway(
@@ -354,7 +350,7 @@ describe('AgentsGateway', () => {
 
     const frame = encodeAgentFrame({
       deviceId: 'udid-1',
-      format: 1,
+      format: 2,
       isKey: true,
       width: 430,
       height: 932,
@@ -366,30 +362,6 @@ describe('AgentsGateway', () => {
     expect(relay.broadcast).toHaveBeenCalledWith(
       expect.objectContaining({ deviceId: 'udid-1', width: 430, height: 932 }),
     );
-  });
-
-  test('시청자 있는 기기는 register 시 스트림 재개 지시', () => {
-    const { gateway, relay } = createGateway();
-    relay.devicesWithViewers.mockReturnValue(['udid-1']);
-    const socket = new FakeSocket();
-    gateway.handleConnection(
-      socket as unknown as WebSocket,
-      createRequest('/agent?token=agent-token&agentId=agent-1'),
-    );
-
-    socket.emit(
-      'message',
-      JSON.stringify({
-        type: 'register',
-        devices: [{ id: 'udid-1', name: 'iPhone', platform: 'ios', osVersion: '17.5', tags: [] }],
-      }),
-      false,
-    );
-
-    const streamMessages = socket.sentPayloads
-      .map((payload) => JSON.parse(payload))
-      .filter((message) => message.type === 'startStream');
-    expect(streamMessages).toEqual([{ type: 'startStream', deviceId: 'udid-1' }]);
   });
 
   test('인증 실패한 소켓의 disconnect는 아무것도 하지 않음', () => {

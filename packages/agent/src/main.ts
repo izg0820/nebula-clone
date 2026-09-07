@@ -21,6 +21,24 @@ function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupe
   return new ControllerSupervisor(config.supervisor);
 }
 
+/** H.264 미러링 관리자 — NEBULA_MIRROR_HELPER 미설정 시 미러링 비활성 */
+function createStreamManager(
+  helperPath: string | null,
+  tunnel: ServerTunnel,
+  discoveryState: DiscoveryState,
+): StreamManager | null {
+  if (!helperPath) {
+    logger.warn('NEBULA_MIRROR_HELPER 미설정 — 미러링 비활성');
+    return null;
+  }
+  return new StreamManager((frame) => tunnel.sendFrame(frame), {
+    helperPath,
+    // 발견 결과의 기기 이름 — mirror-helper의 캡처 장치 매칭(--name)에 사용
+    resolveDeviceName: (deviceId) =>
+      discoveryState.current.find((device) => device.id === deviceId)?.name ?? null,
+  });
+}
+
 /** 준비된 기기에 READY_TAG 부여 (매 등록 주기마다 재계산 — 자가 치유) */
 function withReadinessTag(
   devices: readonly RegisterDeviceInput[],
@@ -53,16 +71,8 @@ async function main(): Promise<void> {
       void discoverAndRegister();
     },
     onCommand: (command) => executor.execute(command),
-    onStreamControl: (deviceId, shouldStart) => {
-      streamManager.handleStreamControl(deviceId, shouldStart);
-    },
   });
-  const streamManager = new StreamManager(resolver, (frame) => tunnel.sendFrame(frame), {
-    helperPath: config.mirrorHelperPath,
-    // 발견 결과의 기기 이름 — mirror-helper의 캡처 장치 매칭(--name)에 사용
-    resolveDeviceName: (deviceId) =>
-      discoveryState.current.find((device) => device.id === deviceId)?.name ?? null,
-  });
+  const streamManager = createStreamManager(config.mirrorHelperPath, tunnel, discoveryState);
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {
@@ -80,8 +90,8 @@ async function main(): Promise<void> {
         .map((device) => device.id)
         .filter((id) => !staticDeviceIds.has(id));
       supervisor?.syncDevices(realDeviceIds);
-      // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (H.264 모드 한정)
-      streamManager.syncAlwaysOn(realDeviceIds);
+      // 미러링 상시 구동 — 시청자 없어도 캡처 유지
+      streamManager?.syncAlwaysOn(realDeviceIds);
       if (!shouldRegister) return;
 
       const sent = tunnel.sendRegister(withReadinessTag(discoveryState.current, resolver));
@@ -108,7 +118,7 @@ async function main(): Promise<void> {
     logger.info('Agent 종료');
     clearInterval(discoveryTimer);
     clearInterval(heartbeatTimer);
-    streamManager.stopAll();
+    streamManager?.stopAll();
     supervisor?.stopAll();
     tunnel.close();
     process.exit(0);

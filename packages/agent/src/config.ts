@@ -17,7 +17,7 @@ export interface AgentConfig {
   readonly staticDevices: readonly RegisterDeviceInput[];
   /** xcodebuild 수퍼바이저 설정 (null이면 정적 포트 모드) */
   readonly supervisor: SupervisorEnvConfig | null;
-  /** mirror-helper 바이너리 경로 — 지정 시 H.264 미러링, 미지정 시 JPEG 폴백 */
+  /** mirror-helper 바이너리 경로 — 미지정 시 미러링 비활성 (H.264 단일 방식) */
   readonly mirrorHelperPath: string | null;
 }
 

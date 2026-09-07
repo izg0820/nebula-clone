@@ -125,11 +125,5 @@ export function parseServerMessage(raw: string): ServerMessage | null {
       action: message.action,
     };
   }
-  if (
-    (message.type === 'startStream' || message.type === 'stopStream') &&
-    typeof message.deviceId === 'string'
-  ) {
-    return { type: message.type, deviceId: message.deviceId };
-  }
   return null;
 }

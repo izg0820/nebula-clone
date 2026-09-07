@@ -8,13 +8,12 @@
  * stampMs: Agent가 프레임을 수신한 시각(Date.now() 하위 32비트) — 구간별 지연 측정용
  * (Agent와 시청 브라우저가 같은 맥이면 시계가 동일해 절대 지연으로 해석 가능)
  *
- * format=jpeg: width/height는 pt (스크린샷 방식), isKey는 항상 1 (모든 프레임 독립)
  * format=h264: width/height는 px (인코더 해상도), payload는 Annex-B access unit
+ * (format 바이트는 프로토콜 진화 대비 유지 — 현재 H.264 단일)
  */
 
-export const FRAME_FORMAT_JPEG = 1;
 export const FRAME_FORMAT_H264 = 2;
-export type FrameFormat = typeof FRAME_FORMAT_JPEG | typeof FRAME_FORMAT_H264;
+export type FrameFormat = typeof FRAME_FORMAT_H264;
 
 export interface AgentFrame {
   readonly deviceId: string;
@@ -41,7 +40,7 @@ const MAX_DEVICE_ID_BYTES = 255;
 const MAX_DIMENSION = 65_535;
 
 function isFrameFormat(value: number): value is FrameFormat {
-  return value === FRAME_FORMAT_JPEG || value === FRAME_FORMAT_H264;
+  return value === FRAME_FORMAT_H264;
 }
 
 export function encodeAgentFrame(frame: AgentFrame): Uint8Array {

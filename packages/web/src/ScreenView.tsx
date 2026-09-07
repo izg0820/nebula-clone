@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { decodeViewerFrame, FRAME_FORMAT_H264, FRAME_FORMAT_JPEG } from '@nebula/shared';
+import { decodeViewerFrame } from '@nebula/shared';
 import { ApiClient, ApiError } from './api';
 import { interpretGesture, toDevicePoint, ScreenSize } from './coordinates';
 
@@ -93,7 +93,7 @@ class H264Player {
   }
 }
 
-/** 기기 화면 뷰 — 서버 릴레이 스트림(H.264 WebCodecs 또는 JPEG 폴백) 표시, 클릭=탭 */
+/** 기기 화면 뷰 — 서버 릴레이 스트림(H.264 WebCodecs) 표시, 클릭=탭 */
 export function ScreenView({
   api,
   serverUrl,
@@ -105,16 +105,13 @@ export function ScreenView({
   onOccupationLost,
   onRelease,
 }: ScreenViewProps) {
-  const [jpegUrl, setJpegUrl] = useState<string | null>(null);
-  const [isVideoMode, setIsVideoMode] = useState(false);
   const [hasFrame, setHasFrame] = useState(false);
-  /** 탭 좌표 환산용 pt 크기 — JPEG 프레임 헤더 또는 점유 직후 스크린샷 1회로 확보 */
+  /** 탭 좌표 환산용 pt 크기 — H.264 프레임은 px 단위라 점유 직후 스크린샷 1회로 확보 */
   const [screenPt, setScreenPt] = useState<ScreenSize | null>(null);
   const [text, setText] = useState('');
   const [fps, setFps] = useState(0);
   const frameCountRef = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const imgRef = useRef<HTMLImageElement>(null);
 
   // 실시간 fps 표시 — 1초 창 프레임 카운트
   useEffect(() => {
@@ -158,7 +155,6 @@ export function ScreenView({
   // 스트림 수신
   useEffect(() => {
     let isActive = true;
-    let currentObjectUrl: string | null = null;
     let player: H264Player | null = null;
     const socket = new WebSocket(toStreamUrl(serverUrl, deviceId, token));
     socket.binaryType = 'arraybuffer';
@@ -169,25 +165,9 @@ export function ScreenView({
       if (!frame) return;
       frameCountRef.current += 1;
 
-      if (frame.format === FRAME_FORMAT_H264) {
-        setIsVideoMode(true);
-        setHasFrame(true);
-        if (!player && canvasRef.current) player = new H264Player(canvasRef.current);
-        player?.push(frame.payload, frame.isKey, frame.width, frame.height);
-        return;
-      }
-      if (frame.format === FRAME_FORMAT_JPEG) {
-        setIsVideoMode(false);
-        setHasFrame(true);
-        // JPEG 헤더의 크기는 pt — 환산 정보로도 사용
-        setScreenPt({ widthPt: frame.width, heightPt: frame.height });
-        const nextUrl = URL.createObjectURL(
-          new Blob([frame.payload.slice()], { type: 'image/jpeg' }),
-        );
-        if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
-        currentObjectUrl = nextUrl;
-        setJpegUrl(nextUrl);
-      }
+      setHasFrame(true);
+      if (!player && canvasRef.current) player = new H264Player(canvasRef.current);
+      player?.push(frame.payload, frame.isKey, frame.width, frame.height);
     };
     socket.onclose = (event) => {
       if (!isActive) return;
@@ -198,7 +178,6 @@ export function ScreenView({
       isActive = false;
       socket.close();
       player?.close();
-      if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
     };
   }, [serverUrl, token, deviceId, onError]);
 
@@ -296,12 +275,6 @@ export function ScreenView({
       .catch((error: unknown) => handleActionError('입력 실패', error));
   }, [api, deviceId, occupantId, text, handleActionError]);
 
-  /** 비디오 모드일 때만 캔버스 표시 (숨겨도 ref는 유지) */
-  function canvasDisplay(): 'block' | 'none' {
-    if (isVideoMode && hasFrame) return 'block';
-    return 'none';
-  }
-
   return (
     <div className="screen-panel">
       <div className="screen-toolbar">
@@ -332,19 +305,7 @@ export function ScreenView({
           onPointerDown={handlePointerDown}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerCancel}
-          style={{ display: canvasDisplay() }}
         />
-        {!isVideoMode && jpegUrl && (
-          <img
-            ref={imgRef}
-            src={jpegUrl}
-            alt="기기 화면"
-            draggable={false}
-            onPointerDown={handlePointerDown}
-            onPointerUp={handlePointerUp}
-            onPointerCancel={handlePointerCancel}
-          />
-        )}
       </div>
 
       <div className="type-row">

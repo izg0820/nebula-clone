@@ -212,8 +212,7 @@ body {
   padding: 13px;
   box-shadow: 0 24px 60px rgba(2, 32, 71, 0.22);
 }
-.phone-frame canvas,
-.phone-frame img {
+.phone-frame canvas {
   display: block;
   max-height: 72vh;
   max-width: 100%;
@@ -229,8 +228,7 @@ body {
 }
 
 /* 누르는 동안(드래그 중) — 접점이 눌린 느낌으로 진하게 */
-.phone-frame canvas:active,
-.phone-frame img:active {
+.phone-frame canvas:active {
   cursor:
     url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='32'%20height='32'%3E%3Ccircle%20cx='16'%20cy='16'%20r='9'%20fill='%233182f6'%20fill-opacity='0.45'%20stroke='%231b64da'%20stroke-width='2'/%3E%3Ccircle%20cx='16'%20cy='16'%20r='2.5'%20fill='%23ffffff'/%3E%3C/svg%3E")
       16 16,

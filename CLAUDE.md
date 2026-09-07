@@ -99,8 +99,9 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
   무관하게 유지됨. Phase 4 점유 만료 처리로 해결 예정 (실사용에서 실제로 겪음)
 - **Phase 3 완료 (H.264 미러링, 원문 방식)**: 실측 **40fps/8KB/frame**. 파이프라인:
   mirror-helper(캡처 장치→VideoToolbox H.264) → Agent H264Stream(stdout 패킷 파싱) →
-  터널 바이너리 프레임 → StreamsRelay → 브라우저 WebCodecs. 시청자 0↔1 전환에 자동
-  시작/중지, 헬퍼 미설정이면 JPEG 폴백(3.5fps). **macOS 26 함정 (실측)**: ① iOS 캡처 장치가
+  터널 바이너리 프레임 → StreamsRelay → 브라우저 WebCodecs. **H.264 단독** — Agent가 기기 발견
+  주기마다 상시 구동(pre-warm), JPEG 스크린샷 폴백·서버 스트림 제어(startStream/stopStream)는
+  제거됨 (느려서 폐기, 2026-09-07). 헬퍼 미설정 시 미러링 비활성. **macOS 26 함정 (실측)**: ① iOS 캡처 장치가
   DiscoverySession에 안 보임 → CMIO 열거로 UID 얻어 `AVCaptureDevice(uniqueID:)` 직접 열기
   ② 최초 발행이 QuickTime 소스 열람으로 트리거됨 — 발행 후엔 QuickTime 종료해도 유지되나
   **콜드 스타트(재연결·재부팅) 자가 발행 미검증** (안 되면 QuickTime 활성화 킥 필요, 백로그).

@@ -7,7 +7,6 @@ import {
 } from '@nestjs/websockets';
 import {
   buildCommandMessage,
-  buildStreamControlMessage,
   COMMAND_ERROR_AGENT_DISCONNECTED,
   COMMAND_ERROR_TIMEOUT,
   COMMAND_ERROR_UNSUPPORTED,
@@ -80,12 +79,7 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly config: ConfigService,
     private readonly devicesService: DevicesService,
     private readonly streamsRelay: StreamsRelayService,
-  ) {
-    // 시청자 0↔1 전환 시 해당 기기의 Agent에 스트림 제어 전달
-    this.streamsRelay.setControlHandler((deviceId, shouldStart) => {
-      this.sendStreamControl(deviceId, shouldStart);
-    });
-  }
+  ) {}
 
   handleConnection(client: AgentSocket, request: IncomingMessage): void {
     if (!this.isAuthorized(request)) {
@@ -131,26 +125,6 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
     this.streamsRelay.broadcast(frame);
-  }
-
-  /** 기기의 Agent에 스트림 시작/중지 지시 (fire-and-forget) */
-  private sendStreamControl(deviceId: string, shouldStart: boolean): void {
-    const agentId = this.findAgentIdForDevice(deviceId);
-    if (!agentId) {
-      this.logger.warn(`스트림 제어 대상 Agent 없음 (device=${deviceId})`);
-      return;
-    }
-    const socket = this.agentSockets.get(agentId);
-    if (!socket || socket.readyState !== socket.OPEN) return;
-    socket.send(JSON.stringify(buildStreamControlMessage(shouldStart, deviceId)));
-  }
-
-  private findAgentIdForDevice(deviceId: string): string | null {
-    try {
-      return this.devicesService.getById(deviceId).agentId;
-    } catch {
-      return null;
-    }
   }
 
   handleDisconnect(client: AgentSocket): void {
@@ -224,7 +198,6 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
           new Set(message.capabilities ?? LEGACY_ACTION_KINDS),
         );
         this.logger.log(`기기 등록 (agent=${agentId}): ${message.devices.length}대`);
-        this.resumeStreamsAfterRegister(message.devices.map((device) => device.id));
         return;
       }
       if (message.type === 'heartbeat') {
@@ -234,14 +207,6 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.resolveCommand(agentId, message.requestId, message.outcome);
     } catch (error) {
       this.logger.error(`Agent 메시지 처리 실패 (agent=${agentId})`, error as Error);
-    }
-  }
-
-  /** Agent 재연결·재등록 시 시청자가 있는 기기의 스트림 재개 */
-  private resumeStreamsAfterRegister(registeredDeviceIds: readonly string[]): void {
-    for (const deviceId of this.streamsRelay.devicesWithViewers()) {
-      if (!registeredDeviceIds.includes(deviceId)) continue;
-      this.sendStreamControl(deviceId, true);
     }
   }
 
