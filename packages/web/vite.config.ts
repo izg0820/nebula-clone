@@ -11,7 +11,8 @@ export default defineConfig({
     commonjsOptions: { include: [/@nebula\/shared/, /node_modules/] },
   },
   test: {
-    environment: 'node',
-    include: ['src/**/*.spec.ts'],
+    // 컴포넌트 테스트용 DOM 환경 + .tsx 스펙 수집 (기존 node/.ts 한정은 컴포넌트 테스트가 수집 불가)
+    environment: 'jsdom',
+    include: ['src/**/*.spec.{ts,tsx}'],
   },
 });
