@@ -26,3 +26,9 @@ export const AGENT_WS_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
 /** 시청자는 수신 전용 — 보내는 메시지가 없어야 정상 */
 export const VIEWER_WS_MAX_PAYLOAD_BYTES = 16 * 1024;
+
+/**
+ * 스트림 유예(pre-warm 유지) — 마지막 시청자 퇴장 후 이 시간 동안 캡처 유지.
+ * 새로고침·StrictMode 재마운트마다 헬퍼가 죽고 콜드 스타트(~2초)되는 것 방지
+ */
+export const STREAM_LINGER_MS = 45_000;

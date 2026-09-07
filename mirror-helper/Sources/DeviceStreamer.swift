@@ -3,9 +3,10 @@ import CoreMedia
 import Foundation
 import VideoToolbox
 
-/// H.264 인코딩 설정
-private let AVERAGE_BITRATE = 4_000_000
-private let KEYFRAME_INTERVAL_SECONDS = 2.0
+/// H.264 인코딩 설정 — 1290x2796 기준. 4Mbps는 고스팅·뿌옇게 뭉개짐 (실측), 12Mbps로 상향
+private let AVERAGE_BITRATE = 12_000_000
+/// 키프레임 간격 — 짧을수록 압축 찌꺼기 회복·중간 합류가 빠름 (대역폭 소폭 증가)
+private let KEYFRAME_INTERVAL_SECONDS = 1.0
 private let EXPECTED_FPS = 60.0
 
 /// Annex-B 시작 코드
