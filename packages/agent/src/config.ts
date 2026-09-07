@@ -1,4 +1,5 @@
-import { hostname } from 'os';
+import { homedir, hostname } from 'os';
+import { join } from 'path';
 import { RegisterDeviceInput } from '@nebula/shared';
 
 /** Agent 설정 */
@@ -10,10 +11,21 @@ export interface AgentConfig {
   readonly agentId: string;
   readonly discoveryIntervalMs: number;
   readonly heartbeatIntervalMs: number;
-  /** 기기 UDID → Controller HTTP 포트 (정적 설정, 수퍼바이저 도입 전까지) */
+  /** 기기 UDID → Controller HTTP 포트 (정적 설정 — 러너 수동 기동 모드) */
   readonly controllerPorts: ReadonlyMap<string, number>;
   /** devicectl 없이 등록할 정적 기기 목록 (개발·파이프라인 검증용) */
   readonly staticDevices: readonly RegisterDeviceInput[];
+  /** xcodebuild 수퍼바이저 설정 (null이면 정적 포트 모드) */
+  readonly supervisor: SupervisorEnvConfig | null;
+}
+
+/** 수퍼바이저 환경 설정 */
+export interface SupervisorEnvConfig {
+  readonly projectPath: string;
+  readonly scheme: string;
+  readonly basePort: number;
+  readonly derivedDataDir: string;
+  readonly logDir: string;
 }
 
 /** 서버 게이트웨이와 동일한 agentId 허용 형식 */
@@ -81,6 +93,36 @@ function parseTags(raw: unknown): readonly string[] {
   return raw as string[];
 }
 
+/** 수퍼바이저 기본값 */
+const DEFAULT_SUPERVISOR_SCHEME = 'NebulaController';
+const DEFAULT_SUPERVISOR_BASE_PORT = 8200;
+/** 기기별 오프셋 여유를 둔 basePort 상한 */
+const MAX_BASE_PORT = 65_000;
+
+/** NEBULA_XCODEBUILD_ENABLED=true일 때 수퍼바이저 설정 로드 — 프로젝트 경로 필수 */
+export function parseSupervisorConfig(env: NodeJS.ProcessEnv): SupervisorEnvConfig | null {
+  if (env.NEBULA_XCODEBUILD_ENABLED !== 'true') return null;
+
+  const projectPath = env.NEBULA_CONTROLLER_PROJECT;
+  if (!projectPath || projectPath.trim().length === 0) {
+    throw new Error('NEBULA_XCODEBUILD_ENABLED=true면 NEBULA_CONTROLLER_PROJECT(.xcodeproj 경로) 필수');
+  }
+
+  const basePort = parsePositiveInt(env.NEBULA_CONTROLLER_BASE_PORT, DEFAULT_SUPERVISOR_BASE_PORT);
+  if (basePort > MAX_BASE_PORT) {
+    throw new Error(`NEBULA_CONTROLLER_BASE_PORT는 ${MAX_BASE_PORT} 이하여야 함 (기기별 오프셋 여유)`);
+  }
+
+  const nebulaHome = join(homedir(), '.nebula');
+  return {
+    projectPath,
+    scheme: env.NEBULA_CONTROLLER_SCHEME ?? DEFAULT_SUPERVISOR_SCHEME,
+    basePort,
+    derivedDataDir: env.NEBULA_DERIVED_DATA_DIR ?? join(nebulaHome, 'derived-data'),
+    logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(nebulaHome, 'logs'),
+  };
+}
+
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
@@ -121,5 +163,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
     ),
     controllerPorts: parseControllerPorts(env.NEBULA_CONTROLLER_PORTS),
     staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
+    supervisor: parseSupervisorConfig(env),
   };
 }

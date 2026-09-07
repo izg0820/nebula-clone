@@ -137,8 +137,10 @@ pnpm build && pnpm start
 - [x] **Phase 2 — 제어**: 명령 파이프라인 전 구간 **실기기 검증 완료** (2026-09-07, iPhone/iOS 26.6.1) —
       devicectl 자동 발견 → 점유 → 서버 API 탭·스와이프·UI 덤프가 USB(iproxy) 경유로 실제 동작.
       XCUITest 러너의 main.sync 런루프 전제, hardwareProperties.platform 필드 파싱도 실측 확정
-- [ ] **Phase 2.5 — 운영 자동화**: Agent의 xcodebuild 수퍼바이저(러너 자동 기동·감시·재시작),
-      iproxy 포워딩 관리, 7일 재서명 자동화 검증
+- [x] **Phase 2.5 — 운영 자동화**: Controller 수퍼바이저 실기기 검증 완료 (2026-09-07) —
+      `NEBULA_XCODEBUILD_ENABLED=true`면 Agent가 기기별 러너·iproxy를 자동 기동, 10초 헬스 폴링,
+      죽으면 백오프 재기동(강제 kill → 2초 후 복구 실측). 준비된 기기는 `controller-ready` 태그로
+      점유 필터 가능. 남은 것: 7일 재서명 자동화 검증(시간 경과 필요)
 - [ ] **Phase 3 — 미러링**: ①스크린샷 MJPEG로 먼저 화면 확보 → ②AVFoundation H.264로 교체,
       웹 콘솔에서 보면서 조작
 - [ ] **Phase 4 — 확장**: CLI/SDK (생성된 OpenAPI 스펙에서 클라이언트 생성), 프로세스 자동 복구,

@@ -40,6 +40,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       heartbeatIntervalMs: 60_000,
       controllerPorts: new Map<string, number>(),
       staticDevices: [],
+      supervisor: null,
     };
   }
 

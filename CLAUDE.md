@@ -89,9 +89,13 @@ controller-ios/   # Swift/XCUITest + XcodeGen — pnpm workspace 밖 (빌드 미
   `hardwareProperties.platform`('iOS')만 있고 `platformIdentifier` 없음 / XCUITest 러너의
   `DispatchQueue.main.sync` 라우팅은 XCTWaiter 대기 중 정상 드레인됨 / codesign은 GUI 세션에서
   키체인 "항상 허용" 1회 후 비대화형 셸에서도 동작 (errSecInternalComponent 예방)
-- **Phase 2.5 남은 것**: Agent의 xcodebuild 수퍼바이저(기동·감시·재시작), iproxy 포워딩 관리,
-  7일 재서명 자동화 검증. Controller 주소는 임시로 `NEBULA_CONTROLLER_PORTS` 정적 설정,
-  기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES` 사용. 러너 기동 절차는 controller-ios/README.md
+- **Phase 2.5 완료** (2026-09-07 실기기 검증): `ControllerSupervisor`가 기기별 xcodebuild 러너 +
+  iproxy 자동 기동·헬스 폴링·백오프 재기동 (강제 kill → 2초 복구 실측). 준비 기기는
+  `controller-ready` 태그. 모드 선택: `NEBULA_XCODEBUILD_ENABLED=true`(수퍼바이저) vs
+  `NEBULA_CONTROLLER_PORTS`(수동 러너). 기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES`.
+  미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
+- **알려진 이슈**: 점유 TTL 없음 — 점유자(occupantId 분실) 사라지면 기기가 잠김, 러너 재기동과
+  무관하게 유지됨. Phase 4 점유 만료 처리로 해결 예정 (실사용에서 실제로 겪음)
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,
   토큰 쿼리스트링 허용, supertest e2e 부재, WS maxPayload 미설정, agentId 정규화 충돌
 
