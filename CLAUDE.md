@@ -84,9 +84,14 @@ controller-ios/   # Swift/XCUITest + XcodeGen — pnpm workspace 밖 (빌드 미
 - **Phase 2 파이프라인 완료**: `POST /devices/:id/actions/{tap,swipe,type,ui-dump}` → 게이트웨이
   sendCommand(requestId 상관, 15초 타임아웃) → Agent CommandExecutor → Controller HTTP.
   가짜 Controller로 e2e 검증 완료. 프로토콜은 `@nebula/shared`로 추출됨
-- **Phase 2 남은 것**: controller-ios 실기기 빌드·검증(맥미니 필요), Agent의 xcodebuild
-  수퍼바이저(기동·감시·재시작), iproxy 포워딩 관리. Agent의 Controller 주소는 임시로
-  `NEBULA_CONTROLLER_PORTS` 정적 설정, 기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES` 사용
+- **Phase 2 실기기 검증 완료** (2026-09-07, wincrane2/iOS 26.6.1): 자동 발견 → 점유 → 서버 API
+  탭·스와이프·UI 덤프 전 구간 실동작. 실측 확정 사실: devicectl JSON은
+  `hardwareProperties.platform`('iOS')만 있고 `platformIdentifier` 없음 / XCUITest 러너의
+  `DispatchQueue.main.sync` 라우팅은 XCTWaiter 대기 중 정상 드레인됨 / codesign은 GUI 세션에서
+  키체인 "항상 허용" 1회 후 비대화형 셸에서도 동작 (errSecInternalComponent 예방)
+- **Phase 2.5 남은 것**: Agent의 xcodebuild 수퍼바이저(기동·감시·재시작), iproxy 포워딩 관리,
+  7일 재서명 자동화 검증. Controller 주소는 임시로 `NEBULA_CONTROLLER_PORTS` 정적 설정,
+  기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES` 사용. 러너 기동 절차는 controller-ios/README.md
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,
   토큰 쿼리스트링 허용, supertest e2e 부재, WS maxPayload 미설정, agentId 정규화 충돌
 

@@ -18,6 +18,8 @@ targets:
         CFBundleDisplayName: Nebula Host
     settings:
       base:
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
+        CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1,2"
 
   NebulaControllerUITests:
@@ -26,6 +28,11 @@ targets:
     sources: [ControllerUITests]
     dependencies:
       - target: NebulaHost
+    settings:
+      base:
+        DEVELOPMENT_TEAM: YOUR_TEAM_ID
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
 
 schemes:
   NebulaController:

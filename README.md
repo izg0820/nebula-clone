@@ -134,9 +134,11 @@ pnpm build && pnpm start
 
 - [x] **Phase 1 — 뼈대**: NestJS 서버(occupy/release/레지스트리/토큰 인증) + Agent(devicectl 기기 발견,
       WS 터널, 하트비트) — 로컬 e2e 구동 확인 (오라클 배포·실기기 발견은 미확인)
-- [~] **Phase 2 — 제어**: 명령 파이프라인(클라이언트→서버→터널→Agent→Controller HTTP) 구현·e2e 검증 완료,
-      XCUITest Controller 소스 작성 완료(빌드 미검증 — 맥미니+실기기 필요). 남은 것: 실기기 검증,
-      Agent의 xcodebuild 수퍼바이저(자동 기동·감시), iproxy 포트 포워딩 관리
+- [x] **Phase 2 — 제어**: 명령 파이프라인 전 구간 **실기기 검증 완료** (2026-09-07, iPhone/iOS 26.6.1) —
+      devicectl 자동 발견 → 점유 → 서버 API 탭·스와이프·UI 덤프가 USB(iproxy) 경유로 실제 동작.
+      XCUITest 러너의 main.sync 런루프 전제, hardwareProperties.platform 필드 파싱도 실측 확정
+- [ ] **Phase 2.5 — 운영 자동화**: Agent의 xcodebuild 수퍼바이저(러너 자동 기동·감시·재시작),
+      iproxy 포워딩 관리, 7일 재서명 자동화 검증
 - [ ] **Phase 3 — 미러링**: ①스크린샷 MJPEG로 먼저 화면 확보 → ②AVFoundation H.264로 교체,
       웹 콘솔에서 보면서 조작
 - [ ] **Phase 4 — 확장**: CLI/SDK (생성된 OpenAPI 스펙에서 클라이언트 생성), 프로세스 자동 복구,
