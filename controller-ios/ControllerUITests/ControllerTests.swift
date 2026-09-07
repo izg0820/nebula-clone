@@ -10,30 +10,39 @@ final class ControllerTests: XCTestCase {
     /// 좌표 상한 — 서버 DTO와 동일 기준 (화면 밖 좌표로 러너가 죽는 것 방지)
     private static let maxCoordinate: Double = 10_000
     private static let maxTextLength = 4_000
+    /// 스와이프 상한 — Agent HTTP 타임아웃(10초)보다 낮게 (서버 DTO는 5초로 더 엄격)
+    private static let maxSwipeDurationMs: Double = 8_000
 
     func testRunControllerServer() throws {
         disableQuiescenceWaits()
         let actions = ActionHandler()
         let environment = ProcessInfo.processInfo.environment
         let port = environment["NEBULA_CONTROLLER_PORT"].flatMap(UInt16.init) ?? Self.defaultPort
-        let token = environment["NEBULA_CONTROLLER_TOKEN"]
+        // 빈 문자열 토큰은 미설정 취급 — "비워서 끄기" 습관이 전면 401 락아웃이 되지 않게
+        var token: String?
+        if let rawToken = environment["NEBULA_CONTROLLER_TOKEN"]?
+            .trimmingCharacters(in: .whitespaces), !rawToken.isEmpty {
+            token = rawToken
+        }
 
+        // 서버 치명 실패 시 fulfill — 대기가 풀려 테스트(러너 프로세스)가 실제로 끝남.
+        // XCTFail만으로는 기록만 되고 1년 대기가 계속 돌아 리스너 없는 유령 러너가 남음
+        let serverFatal = XCTestExpectation(description: "controller server fatal failure")
         let server = try HttpServer(
             port: port,
             handler: { request in
                 Self.route(request: request, token: token, actions: actions)
             },
             onFailure: { message in
-                // 리스너 실패(포트 점유 등)를 조용히 삼키지 않고 러너를 즉시 실패시킴
                 XCTFail("HTTP 서버 실패: \(message)")
+                serverFatal.fulfill()
             }
         )
         server.start()
 
-        // 러너를 살아있게 유지 — 절대 충족되지 않는 expectation으로 무기한 대기
-        let forever = XCTestExpectation(description: "run controller server forever")
+        // 러너를 살아있게 유지 — 서버가 치명 실패할 때까지 무기한 대기
         let oneYearSeconds: TimeInterval = 60 * 60 * 24 * 365
-        _ = XCTWaiter.wait(for: [forever], timeout: oneYearSeconds)
+        _ = XCTWaiter.wait(for: [serverFatal], timeout: oneYearSeconds)
     }
 
     /// 경로 라우팅 — Agent의 ControllerClient와 계약 일치 필수
@@ -70,6 +79,10 @@ final class ControllerTests: XCTestCase {
                 return badRequest("fromX/fromY/toX/toY는 0~\(Int(maxCoordinate)) 범위 숫자")
             }
             let durationMs = body["durationMs"] as? Double ?? 300
+            // 러너 측 상한 — 과도한 드래그가 직렬 큐(/health 포함)를 장시간 막는 것 방지
+            guard durationMs > 0, durationMs <= maxSwipeDurationMs else {
+                return badRequest("durationMs는 1~\(Int(maxSwipeDurationMs)) 범위")
+            }
             actions.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, durationMs: durationMs)
             return HttpResponse(status: 200, body: ["ok": true])
         }

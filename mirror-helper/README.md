@@ -2,7 +2,7 @@
 
 USB 연결된 iPhone을 macOS 화면 캡처 장치(CoreMediaIO)로 열어 VideoToolbox H.264로 인코딩,
 stdout으로 프레임 스트림을 출력하는 Swift CLI. **실기기 검증 완료 (2026-09-07): 40fps, 8KB/frame.**
-Agent가 `NEBULA_MIRROR_HELPER`로 기기당 1프로세스를 스폰한다 (미지정 시 JPEG 폴백 3.5fps).
+Agent가 `NEBULA_MIRROR_HELPER`로 기기당 1프로세스를 스폰한다 (미지정 시 미러링 비활성 — H.264 단독).
 
 ## macOS 26에서의 함정 두 개 (실측으로 확인)
 
@@ -19,7 +19,9 @@ Agent가 `NEBULA_MIRROR_HELPER`로 기기당 1프로세스를 스폰한다 (미�
 ```
 [UInt32 BE payload 길이][UInt8 키프레임(1/0)][Annex-B H.264 access unit]
 ```
-키프레임 앞에는 SPS/PPS 포함 (중간 합류 시청자 디코더 초기화). 키프레임 간격 2초, B-프레임 없음.
+키프레임 앞에는 SPS/PPS 포함 (중간 합류 시청자 디코더 초기화). 키프레임 간격 1초, B-프레임 없음.
+stderr의 `인코더 초기화: WxH` 로그는 Agent가 파싱하는 계약 — 문구를 바꾸면 프레임이 폐기됨.
+캡처 중단(USB 분리·세션 오류)·15초 프레임 정지·인코딩 연속 실패 시 스스로 종료한다 (Agent가 재기동).
 
 ## 사용
 

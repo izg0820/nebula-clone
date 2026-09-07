@@ -1,7 +1,7 @@
 # Nebula iOS Controller
 
 XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스팅하는 기기 제어부 (WebDriverAgent 방식).
-**⚠ 전체 미검증** — Xcode 없는 맥에서 작성됨. 맥미니 + 실기기에서 아래 절차로 확정 필요.
+**실기기 검증 완료 (2026-09-07)** — 탭·스와이프·입력·UI 덤프·스크린샷·홈 버튼 전 구간 실동작.
 
 ## HTTP 계약 (Agent의 ControllerClient와 일치해야 함)
 
@@ -11,7 +11,7 @@ XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스�
 | `POST /tap` | `{x, y}` (pt, 0~10000) | `{"ok":true}` |
 | `POST /swipe` | `{fromX, fromY, toX, toY, durationMs}` | `{"ok":true}` |
 | `POST /type` | `{text}` (4000자 이하) | `{"ok":true}` |
-| `POST /ui` | `{bundleId?}` — 전면 앱 트리를 얻으려면 bundleId 필수 | `{"ok":true, "tree":"..."}` |
+| `POST /ui` | `{bundleId?}` — 러너는 지원하나 **Agent/서버 미배선**: 현재 항상 스프링보드 트리 반환 | `{"ok":true, "tree":"..."}` |
 | `POST /screenshot` | — | `{"ok":true, "jpegBase64":"...", "widthPt":430, "heightPt":932}` |
 
 - 서버는 **루프백(127.0.0.1) 전용 바인딩** — LAN 노출 없음, usbmuxd(USB) 포워딩으로만 접근

@@ -41,6 +41,9 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     private var watchdog: DispatchSourceTimer?
     /// 인코딩 연속 실패 카운트 — writeQueue에서만 접근
     private var consecutiveEncodeFailures = 0
+    /// 현재 인코더가 전제한 소스 해상도 — 회전 등으로 바뀌면 재초기화 (captureQueue에서만 접근)
+    private var configuredSourceWidth = 0
+    private var configuredSourceHeight = 0
 
     init(device: AVCaptureDevice) {
         self.device = device
@@ -111,9 +114,23 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
     ) {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        let sourceWidth = CVPixelBufferGetWidth(imageBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(imageBuffer)
+
+        // 기기 회전 등으로 소스 해상도가 바뀌면 재초기화 — 고정 풀·Trim 스케일이 화면을 잘라내는 것 방지.
+        // 재초기화가 "인코더 초기화:" 로그를 다시 남겨 Agent의 해상도 캐시도 갱신됨 (계약 재활용)
+        if encoder != nil,
+           sourceWidth != configuredSourceWidth || sourceHeight != configuredSourceHeight {
+            log("소스 해상도 변경 감지: \(configuredSourceWidth)x\(configuredSourceHeight) → \(sourceWidth)x\(sourceHeight) — 인코더 재초기화")
+            if let current = encoder { VTCompressionSessionInvalidate(current) }
+            encoder = nil
+            transferSession = nil
+            scaledPool = nil
+        }
+
         if encoder == nil {
-            let sourceWidth = CVPixelBufferGetWidth(imageBuffer)
-            let sourceHeight = CVPixelBufferGetHeight(imageBuffer)
+            configuredSourceWidth = sourceWidth
+            configuredSourceHeight = sourceHeight
             // 짝수 정렬 (인코더 요구)
             let targetWidth = Int(Double(sourceWidth) * SCALE_FACTOR) / 2 * 2
             let targetHeight = Int(Double(sourceHeight) * SCALE_FACTOR) / 2 * 2
@@ -232,7 +249,7 @@ final class DeviceStreamer: NSObject, AVCaptureVideoDataOutputSampleBufferDelega
             throw StreamerError.encoderCreationFailed(status)
         }
 
-        // 저지연 실시간 스트림: B-프레임 금지(WebCodecs 순차 디코딩), 2초 키프레임(중간 합류)
+        // 저지연 실시간 스트림: B-프레임 금지(WebCodecs 순차 디코딩), 1초 키프레임(중간 합류·드롭 복구)
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_AllowFrameReordering, value: kCFBooleanFalse)
         VTSessionSetProperty(created, key: kVTCompressionPropertyKey_ProfileLevel, value: kVTProfileLevel_H264_Main_AutoLevel)
