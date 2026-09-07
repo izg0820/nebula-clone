@@ -4,6 +4,8 @@ import { logger } from './logger';
 
 /** 헬퍼 사망 시 재기동 대기 */
 const HELPER_RESTART_MS = 2_000;
+/** SIGTERM 후 이 시간 내 미종료 시 SIGKILL — 행한 헬퍼가 캡처 장치를 계속 점유하는 것 방지 */
+const KILL_ESCALATION_MS = 2_000;
 /** 패킷 상한 — 손상 스트림으로 인한 메모리 폭주 방지 */
 const MAX_PACKET_BYTES = 8 * 1024 * 1024;
 
@@ -66,8 +68,17 @@ export class H264Stream {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
-    this.child?.kill('SIGTERM');
+    const child = this.child;
     this.child = null;
+    if (!child) return;
+
+    child.kill('SIGTERM');
+    const escalation = setTimeout(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      logger.warn({ deviceId: this.config.deviceId }, '헬퍼 SIGTERM 미응답 — SIGKILL');
+      child.kill('SIGKILL');
+    }, KILL_ESCALATION_MS);
+    escalation.unref();
   }
 
   private launch(): void {

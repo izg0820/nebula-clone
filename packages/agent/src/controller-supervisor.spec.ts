@@ -191,4 +191,52 @@ describe('ControllerSupervisor', () => {
 
     expect(spawned).toHaveLength(2);
   });
+
+  test('spawnProcess 동기 throw 시 데몬이 죽지 않고 백오프 재기동으로 수렴', () => {
+    const spawned: FakeChild[] = [];
+    let shouldThrow = true;
+    const supervisor = new ControllerSupervisor(CONFIG, {
+      spawnProcess: () => {
+        if (shouldThrow) throw new Error('EMFILE: too many open files');
+        const child = new FakeChild();
+        spawned.push(child);
+        return child;
+      },
+      checkHealth: () => Promise.resolve(true),
+    });
+
+    expect(() => supervisor.syncDevices(['udid-1'])).not.toThrow();
+    expect(spawned).toHaveLength(0);
+
+    // 백오프(2초) 후 재기동에서 정상 spawn — 세션이 wedge되지 않음
+    shouldThrow = false;
+    jest.advanceTimersByTime(2_000);
+    expect(spawned).toHaveLength(2);
+  });
+
+  test('awaitTermination — 유예 내 미종료 자식에 SIGKILL 에스컬레이션', async () => {
+    const { supervisor, spawned } = createHarness();
+    supervisor.syncDevices(['udid-1']);
+    supervisor.stopAll();
+    expect(spawned[0].child.killedWith).toBe('SIGTERM');
+
+    const waiting = supervisor.awaitTermination(1_000);
+    await jest.advanceTimersByTimeAsync(1_100);
+    await waiting;
+
+    expect(spawned[0].child.killedWith).toBe('SIGKILL');
+    expect(spawned[1].child.killedWith).toBe('SIGKILL');
+  });
+
+  test('awaitTermination — 자식이 이미 종료됐으면 즉시 반환·SIGKILL 없음', async () => {
+    const { supervisor, spawned } = createHarness();
+    supervisor.syncDevices(['udid-1']);
+    supervisor.stopAll();
+    for (const entry of spawned) entry.child.emit('exit', 0);
+
+    await supervisor.awaitTermination(1_000);
+
+    expect(spawned[0].child.killedWith).toBe('SIGTERM');
+    expect(spawned[1].child.killedWith).toBe('SIGTERM');
+  });
 });

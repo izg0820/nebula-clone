@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { mkdirSync, openSync } from 'fs';
+import { closeSync, mkdirSync, openSync } from 'fs';
 import { join } from 'path';
 import { ControllerEndpointResolver } from './controller-registry';
 import { logger } from './logger';
@@ -65,11 +65,25 @@ interface Session {
   generation: number;
 }
 
+/** 로그 파일 fd 확보 — 실패(디렉터리 없음·EMFILE 등) 시 로그 없이 진행 */
+function openLogFd(logPath: string): number | null {
+  try {
+    return openSync(logPath, 'a');
+  } catch (error) {
+    logger.warn({ err: error, logPath }, '로그 파일 열기 실패 — 진단 로그 없이 spawn');
+    return null;
+  }
+}
+
 /** stdout·stderr를 로그 파일에 append — 서명 만료·빌드 실패 진단 근거 확보 */
 function defaultSpawn(command: string, args: readonly string[], logPath: string): ChildLike {
-  const fd = openSync(logPath, 'a');
+  const fd = openLogFd(logPath);
+  const stdio: ('ignore' | number)[] = fd === null ? ['ignore', 'ignore', 'ignore'] : ['ignore', fd, fd];
   // detached: 프로세스 그룹 리더로 만들어 그룹 단위 종료 가능하게
-  return spawn(command, [...args], { stdio: ['ignore', fd, fd], detached: true });
+  const child = spawn(command, [...args], { stdio, detached: true });
+  // spawn이 fd를 자식에 dup하므로 부모 사본은 즉시 닫음 — 재기동 루프에서 fd 누수 방지
+  if (fd !== null) closeSync(fd);
+  return child;
 }
 
 async function defaultCheckHealth(baseUrl: string): Promise<boolean> {
@@ -111,6 +125,8 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
   private nextPortOffset = 0;
   /** 정리된 세션의 반납 포트 — 단조 증가로 인한 포트 고갈 방지 */
   private readonly freePorts: number[] = [];
+  /** 종료 신호를 보냈지만 아직 exit 확인이 안 된 프로세스 — awaitTermination 대기 대상 */
+  private terminating: TrackedProcess[] = [];
   private readonly deps: SupervisorDeps;
 
   constructor(
@@ -146,6 +162,24 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
 
   stopAll(): void {
     for (const deviceId of [...this.sessions.keys()]) this.stopSession(deviceId);
+  }
+
+  /**
+   * 종료 신호를 보낸 프로세스들의 실제 종료 대기 — 상한 초과 시 SIGKILL 후 반환.
+   * shutdown 경로에서 process.exit 전에 호출해야 detached 자식(xcodebuild·iproxy)이
+   * 고아로 남아 포트를 점유하는 것을 막음 (unref된 에스컬레이션 타이머는 exit 시 실행 안 됨)
+   */
+  async awaitTermination(maxWaitMs: number): Promise<void> {
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      this.terminating = this.terminating.filter((tracked) => !tracked.hasExited);
+      if (this.terminating.length === 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    for (const tracked of this.terminating) {
+      logger.warn('종료 유예 초과 — SIGKILL');
+      signalProcessTree(tracked, 'SIGKILL');
+    }
   }
 
   private allocatePort(): number {
@@ -188,21 +222,29 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     const generation = session.generation;
     const logPath = join(this.config.logDir, `controller-${session.deviceId}.log`);
 
-    session.runner = this.track(
-      session, generation, 'xcodebuild',
-      ['test',
-        '-project', this.config.projectPath,
-        '-scheme', this.config.scheme,
-        '-destination', `id=${session.deviceId}`,
-        '-derivedDataPath', join(this.config.derivedDataDir, session.deviceId),
-        '-allowProvisioningUpdates'],
-      logPath,
-    );
-    session.proxy = this.track(
-      session, generation, 'iproxy',
-      [String(session.port), '8100', '-u', session.deviceId],
-      logPath,
-    );
+    // spawn 자체의 동기 예외(EMFILE 등)도 백오프 재기동으로 수렴 — 미보호 시
+    // startSession 경로는 세션이 영구 wedge, restartTimer 경로는 uncaughtException으로 데몬 사망
+    try {
+      session.runner = this.track(
+        session, generation, 'xcodebuild',
+        ['test',
+          '-project', this.config.projectPath,
+          '-scheme', this.config.scheme,
+          '-destination', `id=${session.deviceId}`,
+          '-derivedDataPath', join(this.config.derivedDataDir, session.deviceId),
+          '-allowProvisioningUpdates'],
+        logPath,
+      );
+      session.proxy = this.track(
+        session, generation, 'iproxy',
+        [String(session.port), '8100', '-u', session.deviceId],
+        logPath,
+      );
+    } catch (error) {
+      logger.error({ err: error, deviceId: session.deviceId }, 'Controller 프로세스 기동 실패');
+      this.scheduleRestart(session);
+      return;
+    }
 
     session.healthTimer = setInterval(
       () => void this.pollHealth(session, generation),
@@ -310,6 +352,7 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
 
     for (const tracked of [session.runner, session.proxy]) {
       if (!tracked) continue;
+      this.terminating.push(tracked);
       signalProcessTree(tracked, 'SIGTERM');
       const escalation = setTimeout(() => {
         if (tracked.hasExited) return;

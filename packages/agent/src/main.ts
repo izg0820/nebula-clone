@@ -114,14 +114,25 @@ async function main(): Promise<void> {
     tunnel.sendHeartbeat(deviceIds);
   }, config.heartbeatIntervalMs);
 
+  // 자식 프로세스 종료 대기 상한 — 수퍼바이저 SIGKILL 에스컬레이션(3초)보다 길게
+  const SHUTDOWN_GRACE_MS = 5_000;
+  let isShuttingDown = false;
+
   const shutdown = (): void => {
+    // 신호 중복(SIGINT 연타 등)으로 종료 절차가 재진입하지 않도록
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     logger.info('Agent 종료');
     clearInterval(discoveryTimer);
     clearInterval(heartbeatTimer);
     streamManager?.stopAll();
     supervisor?.stopAll();
     tunnel.close();
-    process.exit(0);
+    // 즉시 exit 금지 — detached 자식(xcodebuild·iproxy)이 고아로 남아 포트 점유함
+    void (async (): Promise<void> => {
+      await supervisor?.awaitTermination(SHUTDOWN_GRACE_MS);
+      process.exit(0);
+    })();
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
