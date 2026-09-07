@@ -1,3 +1,4 @@
+import { accessSync, constants } from 'fs';
 import { homedir, hostname } from 'os';
 import { join } from 'path';
 import { RegisterDeviceInput } from '@nebula/shared';
@@ -37,6 +38,8 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 const DEFAULT_DISCOVERY_INTERVAL_MS = 20_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 25_000;
+/** 주기 하한 — 1ms 같은 값이 devicectl spawn 폭주로 이어지는 것 방지 */
+const MIN_INTERVAL_MS = 1_000;
 const MIN_TOKEN_LENGTH = 24;
 
 /** 호스트명을 agentId 허용 형식으로 정규화 */
@@ -52,9 +55,11 @@ export function parseControllerPorts(raw: string | undefined): ReadonlyMap<strin
   if (!raw || raw.trim().length === 0) return ports;
 
   for (const pair of raw.split(',')) {
-    const [deviceId, portText] = pair.split(':').map((part) => part.trim());
+    const parts = pair.split(':').map((part) => part.trim());
+    const [deviceId, portText] = parts;
     const port = Number(portText);
-    if (!deviceId || !Number.isInteger(port) || port <= 0 || port > 65_535) {
+    // 초과 세그먼트(udid:8100:x)도 오타로 보고 거부 — 조용한 무시 금지
+    if (parts.length !== 2 || !deviceId || !Number.isInteger(port) || port <= 0 || port > 65_535) {
       throw new Error(`NEBULA_CONTROLLER_PORTS 형식 오류: "${pair}" (udid:port,udid2:port)`);
     }
     ports.set(deviceId, port);
@@ -112,7 +117,11 @@ export function parseSupervisorConfig(env: NodeJS.ProcessEnv): SupervisorEnvConf
     throw new Error('NEBULA_XCODEBUILD_ENABLED=true면 NEBULA_CONTROLLER_PROJECT(.xcodeproj 경로) 필수');
   }
 
-  const basePort = parsePositiveInt(env.NEBULA_CONTROLLER_BASE_PORT, DEFAULT_SUPERVISOR_BASE_PORT);
+  const basePort = parsePositiveInt(
+    'NEBULA_CONTROLLER_BASE_PORT',
+    env.NEBULA_CONTROLLER_BASE_PORT,
+    DEFAULT_SUPERVISOR_BASE_PORT,
+  );
   if (basePort > MAX_BASE_PORT) {
     throw new Error(`NEBULA_CONTROLLER_BASE_PORT는 ${MAX_BASE_PORT} 이하여야 함 (기기별 오프셋 여유)`);
   }
@@ -127,13 +136,33 @@ export function parseSupervisorConfig(env: NodeJS.ProcessEnv): SupervisorEnvConf
   };
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
+function parsePositiveInt(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+  minimum = 1,
+): number {
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`양의 정수가 아닌 값: ${raw}`);
+    throw new Error(`${name}: 양의 정수가 아닌 값: ${raw}`);
+  }
+  if (parsed < minimum) {
+    // 주기류가 너무 짧으면 devicectl spawn 폭주 — 하한 강제
+    throw new Error(`${name}: 최소 ${minimum} 이상이어야 함 (받은 값: ${raw})`);
   }
   return parsed;
+}
+
+/** 지정 시 존재·실행 권한을 기동 시점에 확인 — 경로 오타가 무한 spawn 재시도로만 드러나지 않게 */
+function parseMirrorHelperPath(raw: string | undefined): string | null {
+  if (!raw || raw.trim().length === 0) return null;
+  try {
+    accessSync(raw, constants.X_OK);
+  } catch {
+    throw new Error(`NEBULA_MIRROR_HELPER 경로가 없거나 실행 권한 없음: ${raw}`);
+  }
+  return raw;
 }
 
 /** 환경 변수 → 설정 로드. 누락·형식 오류 시 즉시 실패 */
@@ -147,6 +176,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
   if (!agentToken || agentToken.length < MIN_TOKEN_LENGTH) {
     throw new Error(`NEBULA_AGENT_TOKEN 누락 또는 ${MIN_TOKEN_LENGTH}자 미만`);
   }
+  // 서버는 change-me* 값을 거부함 — 여기서 안 걸러주면 4401 재연결 루프로만 드러남
+  if (agentToken.startsWith('change-me')) {
+    throw new Error('NEBULA_AGENT_TOKEN이 플레이스홀더 값 — openssl rand -hex 32로 교체');
+  }
 
   const agentId = sanitizeAgentId(env.NEBULA_AGENT_ID ?? hostname());
   if (!AGENT_ID_PATTERN.test(agentId)) {
@@ -158,17 +191,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
     agentToken,
     agentId,
     discoveryIntervalMs: parsePositiveInt(
+      'NEBULA_DISCOVERY_INTERVAL_MS',
       env.NEBULA_DISCOVERY_INTERVAL_MS,
       DEFAULT_DISCOVERY_INTERVAL_MS,
+      MIN_INTERVAL_MS,
     ),
     heartbeatIntervalMs: parsePositiveInt(
+      'NEBULA_HEARTBEAT_INTERVAL_MS',
       env.NEBULA_HEARTBEAT_INTERVAL_MS,
       DEFAULT_HEARTBEAT_INTERVAL_MS,
+      MIN_INTERVAL_MS,
     ),
     controllerPorts: parseControllerPorts(env.NEBULA_CONTROLLER_PORTS),
     staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
     supervisor: parseSupervisorConfig(env),
-    mirrorHelperPath: env.NEBULA_MIRROR_HELPER ?? null,
+    mirrorHelperPath: parseMirrorHelperPath(env.NEBULA_MIRROR_HELPER),
     controllerToken: parseControllerToken(env.NEBULA_CONTROLLER_TOKEN),
   };
 }

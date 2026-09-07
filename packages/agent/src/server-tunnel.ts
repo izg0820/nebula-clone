@@ -104,6 +104,8 @@ export class ServerTunnel {
     url.searchParams.set('agentId', this.config.agentId);
     const socket = new WebSocket(url, {
       headers: { authorization: `Bearer ${this.config.agentToken}` },
+      // ws 기본값은 무제한 — NAT 블랙홀에서 수 분간 close 이벤트 없이 멈추는 것 방지
+      handshakeTimeout: 10_000,
     });
     this.socket = socket;
 

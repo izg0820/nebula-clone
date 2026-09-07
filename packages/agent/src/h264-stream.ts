@@ -19,15 +19,22 @@ const MAX_PACKET_BYTES = 8 * 1024 * 1024;
 /** mirror-helper stdout 패킷([u32BE len][u8 isKey][Annex-B]) 증분 파서 */
 export class HelperPacketParser {
   private buffer: Buffer = Buffer.alloc(0);
+  /** 손상 감지 후 재개 금지 — 재시작 전까지 도착하는 청크가 버퍼에 쌓이지 않게 */
+  private isPoisoned = false;
 
   /** 수신 청크 추가 후 완성된 패킷들 반환. 손상 감지 시 null (스트림 재시작 필요) */
   push(chunk: Buffer): Array<{ isKey: boolean; payload: Buffer }> | null {
+    if (this.isPoisoned) return null;
     this.buffer = Buffer.concat([this.buffer, chunk]);
     const packets: Array<{ isKey: boolean; payload: Buffer }> = [];
 
     while (this.buffer.length >= 5) {
       const length = this.buffer.readUInt32BE(0);
-      if (length === 0 || length > MAX_PACKET_BYTES) return null;
+      if (length === 0 || length > MAX_PACKET_BYTES) {
+        this.isPoisoned = true;
+        this.buffer = Buffer.alloc(0);
+        return null;
+      }
       if (this.buffer.length < 5 + length) break;
 
       packets.push({

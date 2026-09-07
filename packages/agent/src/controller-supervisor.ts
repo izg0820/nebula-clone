@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { closeSync, mkdirSync, openSync } from 'fs';
+import { closeSync, mkdirSync, openSync, statSync } from 'fs';
 import { join } from 'path';
 import { ControllerEndpointResolver } from './controller-registry';
 import { logger } from './logger';
@@ -15,6 +15,18 @@ const RESTART_MAX_MS = 60_000;
 
 /** SIGTERM 후 이 시간 내 미종료 시 SIGKILL 에스컬레이션 */
 const KILL_ESCALATION_MS = 3_000;
+
+/** 반납 포트 재사용 쿨다운 — 옛 iproxy가 bind를 놓기 전 새 세션이 같은 포트를 잡는 경합 방지 */
+const PORT_COOLDOWN_MS = 5_000;
+
+/**
+ * 기동 후 이 시간 내 준비(첫 헬스 성공) 실패 시 강제 재기동 — xcodebuild가
+ * 키체인 프롬프트 등으로 행하면 "영원히 not-ready·로그 없음"으로 남는 것 방지
+ */
+const READY_DEADLINE_MS = 10 * 60_000;
+
+/** xcodebuild 로그 파일 상한 — 재기동 루프에서 디스크 압박 방지 (초과 시 truncate) */
+const LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 /** 수퍼바이저 설정 */
 export interface SupervisorConfig {
@@ -65,15 +77,26 @@ interface Session {
   isStopping: boolean;
   /** 재기동 세대 — 옛 세대의 늦은 exit·헬스 응답이 새 세션을 건드리지 않도록 */
   generation: number;
+  /** 현 세대 기동 시각 — 준비 데드라인 판정용 */
+  launchedAtMs: number;
 }
 
-/** 로그 파일 fd 확보 — 실패(디렉터리 없음·EMFILE 등) 시 로그 없이 진행 */
+/** 로그 파일 fd 확보 — 상한 초과 시 truncate(회전), 실패(디렉터리 없음·EMFILE 등) 시 로그 없이 진행 */
 function openLogFd(logPath: string): number | null {
   try {
-    return openSync(logPath, 'a');
+    const flags = shouldTruncateLog(logPath) ? 'w' : 'a';
+    return openSync(logPath, flags);
   } catch (error) {
     logger.warn({ err: error, logPath }, '로그 파일 열기 실패 — 진단 로그 없이 spawn');
     return null;
+  }
+}
+
+function shouldTruncateLog(logPath: string): boolean {
+  try {
+    return statSync(logPath).size > LOG_MAX_BYTES;
+  } catch {
+    return false;
   }
 }
 
@@ -228,6 +251,7 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
       restartTimer: null,
       isStopping: false,
       generation: 0,
+      launchedAtMs: Date.now(),
     };
     this.sessions.set(deviceId, session);
     logger.info({ deviceId, port: session.port }, 'Controller 세션 시작');
@@ -244,6 +268,7 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     session.isReady = false;
     session.healthFailCount = 0;
     session.generation += 1;
+    session.launchedAtMs = Date.now();
     const generation = session.generation;
     const logPath = join(this.config.logDir, `controller-${session.deviceId}.log`);
 
@@ -319,8 +344,16 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     }
 
     session.healthFailCount += 1;
-    // 준비 전(빌드 중)에는 실패가 정상 — 준비된 후의 연속 실패만 재기동 사유
-    if (!session.isReady) return;
+    // 준비 전(빌드 중)에는 실패가 정상 — 단, 데드라인 초과는 행(키체인 프롬프트 등)으로 보고 재기동
+    if (!session.isReady) {
+      if (Date.now() - session.launchedAtMs < READY_DEADLINE_MS) return;
+      logger.error(
+        { deviceId: session.deviceId, deadlineMs: READY_DEADLINE_MS },
+        'Controller 준비 데드라인 초과 — 강제 재기동 (xcodebuild 행 의심, 로그 파일 확인)',
+      );
+      this.scheduleRestart(session);
+      return;
+    }
     if (session.healthFailCount < HEALTH_FAIL_THRESHOLD) return;
 
     logger.warn(
@@ -363,7 +396,11 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     if (session.restartTimer) clearTimeout(session.restartTimer);
     this.teardownProcesses(session);
     this.sessions.delete(deviceId);
-    this.freePorts.push(session.port);
+    // 즉시 반납 금지 — 옛 iproxy가 아직 bind 중일 수 있어 쿨다운 후 재사용
+    const cooldown = setTimeout(() => {
+      this.freePorts.push(session.port);
+    }, PORT_COOLDOWN_MS);
+    cooldown.unref();
     logger.info({ deviceId }, 'Controller 세션 정리');
   }
 

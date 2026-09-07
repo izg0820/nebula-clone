@@ -122,6 +122,29 @@ sequenceDiagram
 
 ## 실행 방법
 
+### tmux로 한 번에 실행
+
+서버와 Agent의 `.env`를 최초 한 번 준비한 뒤 루트에서 실행한다.
+
+```bash
+cp packages/server/.env.example packages/server/.env
+cp packages/agent/.env.example packages/agent/.env
+# 두 .env의 토큰과 Agent의 Controller·미러링 경로를 실제 환경에 맞게 수정
+
+pnpm dev          # server / agent / web / Controller 로그를 tmux pane으로 실행
+pnpm dev:stop     # Controller 자식 프로세스까지 정상 종료
+pnpm dev:restart  # 전체 재시작
+```
+
+이미 `nebula` 세션이 실행 중이면 `pnpm dev`는 새 프로세스를 만들지 않고 기존 세션에 연결한다.
+tmux에서는 `Ctrl-b d`로 프로세스를 유지한 채 세션에서 빠져나올 수 있다.
+이 명령은 Agent에 iOS Controller 프로젝트와 미러링 헬퍼 경로를 자동으로 주입한다. 따라서 Agent가
+`xcodebuild`, `iproxy`, 미러링 헬퍼를 함께 실행하고 죽은 프로세스를 감시하여 재시작한다. 실행 전에
+`controller-ios/NebulaController.xcodeproj`와 `mirror-helper/.build/debug/mirror-helper`가 준비되어
+있어야 하며, 없으면 필요한 준비 명령을 안내하고 종료한다.
+
+### 개별 실행
+
 ```bash
 pnpm install
 

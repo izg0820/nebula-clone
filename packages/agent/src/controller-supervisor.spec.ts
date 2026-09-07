@@ -172,9 +172,15 @@ describe('ControllerSupervisor', () => {
     expect(spawned[0].child.killedWith).toBe('SIGTERM');
     expect(supervisor.resolve('udid-1')).toBeNull();
 
-    // 반납된 8200 포트가 새 기기에 재사용됨 (단조 증가 고갈 방지)
+    // 쿨다운 전에는 반납 포트를 재사용하지 않음 (옛 iproxy bind 경합 방지)
     supervisor.syncDevices(['udid-2', 'udid-3']);
-    expect(supervisor.resolve('udid-3')).toBe('http://127.0.0.1:8200');
+    expect(supervisor.resolve('udid-3')).toBe('http://127.0.0.1:8202');
+    supervisor.syncDevices(['udid-2']);
+
+    // 쿨다운 경과 후에는 반납된 8200 포트가 재사용됨 (단조 증가 고갈 방지)
+    jest.advanceTimersByTime(5_000);
+    supervisor.syncDevices(['udid-2', 'udid-4']);
+    expect(supervisor.resolve('udid-4')).toBe('http://127.0.0.1:8200');
 
     supervisor.stopAll();
     expect(supervisor.resolve('udid-2')).toBeNull();

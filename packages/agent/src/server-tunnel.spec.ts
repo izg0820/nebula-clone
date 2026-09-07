@@ -42,6 +42,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       staticDevices: [],
       supervisor: null,
       mirrorHelperPath: null,
+      controllerToken: null,
     };
   }
 

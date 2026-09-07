@@ -41,10 +41,33 @@ describe('loadConfig', () => {
     expect(config.agentId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
   });
 
-  test('주기 값이 양의 정수가 아니면 실패', () => {
+  test('주기 값이 양의 정수가 아니면 실패 (변수명 포함)', () => {
     expect(() =>
       loadConfig({ ...VALID_ENV, NEBULA_DISCOVERY_INTERVAL_MS: '-1' }),
-    ).toThrow(/양의 정수/);
+    ).toThrow(/NEBULA_DISCOVERY_INTERVAL_MS.*양의 정수/);
+  });
+
+  test('주기 하한 미만이면 실패 (spawn 폭주 방지)', () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, NEBULA_DISCOVERY_INTERVAL_MS: '10' }),
+    ).toThrow(/최소 1000/);
+  });
+
+  test('플레이스홀더 토큰은 기동 거부 (서버 4401 재연결 루프 예방)', () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, NEBULA_AGENT_TOKEN: 'change-me-run-openssl-rand-hex-32' }),
+    ).toThrow(/플레이스홀더/);
+  });
+
+  test('미러링 헬퍼 경로가 존재하지 않으면 기동 거부', () => {
+    expect(() =>
+      loadConfig({ ...VALID_ENV, NEBULA_MIRROR_HELPER: '/없는/경로/mirror-helper' }),
+    ).toThrow(/NEBULA_MIRROR_HELPER/);
+  });
+
+  test('미러링 헬퍼 경로가 실행 가능하면 통과', () => {
+    const config = loadConfig({ ...VALID_ENV, NEBULA_MIRROR_HELPER: '/bin/ls' });
+    expect(config.mirrorHelperPath).toBe('/bin/ls');
   });
 });
 
@@ -60,6 +83,8 @@ describe('parseControllerPorts', () => {
     expect(() => parseControllerPorts('udid-1')).toThrow(/형식 오류/);
     expect(() => parseControllerPorts('udid-1:0')).toThrow(/형식 오류/);
     expect(() => parseControllerPorts('udid-1:70000')).toThrow(/형식 오류/);
+    // 초과 세그먼트도 오타로 보고 거부 (조용한 무시 금지)
+    expect(() => parseControllerPorts('udid-1:8100:extra')).toThrow(/형식 오류/);
   });
 });
 

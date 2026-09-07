@@ -2,6 +2,9 @@
   "name": "nebula-clone",
   "private": true,
   "scripts": {
+    "dev": "bash scripts/dev-tmux.sh",
+    "dev:stop": "bash scripts/dev-tmux.sh stop",
+    "dev:restart": "bash scripts/dev-tmux.sh restart",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",
