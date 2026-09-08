@@ -21,6 +21,7 @@ fail()  { printf '\033[1;31m[dev]\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v pnpm >/dev/null || fail "pnpm 필요"
 command -v node >/dev/null || fail "node 필요"
+[ -d "$repo_root/node_modules" ] || fail "node_modules 없음 — 루트에서 pnpm install 먼저"
 [ -f "$repo_root/packages/server/.env" ] || fail "packages/server/.env 없음 — cp .env.example .env 후 토큰 설정 (openssl rand -hex 32, 두 토큰은 서로 다르게)"
 [ -f "$repo_root/packages/agent/.env" ]  || fail "packages/agent/.env 없음 — cp .env.example .env 후 서버 주소·토큰 설정"
 
@@ -38,6 +39,14 @@ if [ "$mode" = "--fake" ]; then
   export NEBULA_XCODEBUILD_ENABLED=''
   export NEBULA_MIRROR_HELPER=''
 else
+  # 수퍼바이저(기본 on) 도구 사전 검사 — 없으면 기동 후 재기동 루프만 돌고 원인이 로그에 묻힘.
+  # .env에 NEBULA_XCODEBUILD_ENABLED=false를 명시한 수동 러너 모드는 검사 생략
+  if ! grep -q '^NEBULA_XCODEBUILD_ENABLED=false' "$repo_root/packages/agent/.env"; then
+    xcodebuild -version >/dev/null 2>&1 \
+      || fail "xcodebuild 실행 불가 — Xcode 전체 설치 필요 (CLT만으로는 부족, xcode-select -p 확인)"
+    command -v iproxy >/dev/null || fail "iproxy 필요 — brew install libimobiledevice"
+  fi
+
   agent_env_default NEBULA_XCODEBUILD_ENABLED true
   agent_env_default NEBULA_CONTROLLER_PROJECT "$repo_root/controller-ios/NebulaController.xcodeproj"
 
@@ -92,29 +101,52 @@ wait_stack_gone() {
   return 1
 }
 
+# 자기 자신 또는 조상(pgrep이 셸 래퍼 커맨드라인을 매치하는 경우)인지 — 오인 자살 방지
+is_self_or_ancestor() {
+  local target="$1" cur="$$"
+  while [ -n "$cur" ] && [ "$cur" -gt 1 ] 2>/dev/null; do
+    [ "$cur" = "$target" ] && return 0
+    cur="$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d ' ')"
+  done
+  return 1
+}
+
 stop_previous_stack() {
-  # ① 이전 dev.sh가 살아 있으면 INT — 자체 trap이 서버·Agent(러너·iproxy·헬퍼 포함)까지 정리
-  if [ -f "$pid_file" ]; then
-    local prev_pid
-    prev_pid="$(cat "$pid_file" 2>/dev/null || true)"
-    if [ -n "$prev_pid" ] && kill -0 "$prev_pid" 2>/dev/null \
-       && ps -o command= -p "$prev_pid" 2>/dev/null | grep -q 'dev\.sh'; then
-      blue "이전 dev.sh(pid $prev_pid) 종료 중..."
-      kill -INT "$prev_pid" 2>/dev/null || true
-      for _ in $(seq 1 150); do kill -0 "$prev_pid" 2>/dev/null || break; sleep 0.1; done
-    fi
-    rm -f "$pid_file"
-  fi
+  # ① 이전 dev.sh 전부(자신·조상 제외) 종료 — 자체 trap이 자식까지 정리.
+  #    주의: INT가 아니라 TERM — 백그라운드(&·비대화형)로 실행된 셸은 SIGINT를 ignore로
+  #    상속하고 trap도 안 걸려 INT가 씹힘 (실측). pid 파일 단독 추적은 파일이 지워지거나
+  #    구버전 스크립트의 유령을 놓치므로 pgrep으로 전수 탐지
+  local prev_pids pid
+  prev_pids="$(pgrep -f 'scripts/dev\.sh' 2>/dev/null || true)"
+  for pid in $prev_pids; do
+    is_self_or_ancestor "$pid" && continue
+    blue "이전 dev.sh(pid $pid) 종료 중..."
+    kill -TERM "$pid" 2>/dev/null || true
+  done
+  for pid in $prev_pids; do
+    is_self_or_ancestor "$pid" && continue
+    for _ in $(seq 1 150); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    # trap조차 못 도는 상태(구버전·중단된 cleanup)는 강제 종료
+    kill -9 "$pid" 2>/dev/null || true
+  done
+  rm -f "$pid_file"
 
   # ② 남은(고아 포함) 스택 프로세스 — TERM 후 graceful 대기, 안 죽으면 KILL
-  local leftover pid
+  local leftover
   leftover="$(find_stack_pids)"
-  [ -z "$leftover" ] && return 0
-  blue "기존 스택 프로세스 종료: $(echo "$leftover" | tr '\n' ' ')"
-  for pid in $leftover; do kill "$pid" 2>/dev/null || true; done
-  wait_stack_gone 80 && return 0
-  for pid in $(find_stack_pids); do kill -9 "$pid" 2>/dev/null || true; done
-  wait_stack_gone 20 || fail "기존 스택 프로세스가 종료되지 않음 — 수동 확인 필요 (lsof -d cwd로 packages/* 프로세스 확인)"
+  if [ -n "$leftover" ]; then
+    blue "기존 스택 프로세스 종료: $(echo "$leftover" | tr '\n' ' ')"
+    for pid in $leftover; do kill "$pid" 2>/dev/null || true; done
+    if ! wait_stack_gone 80; then
+      for pid in $(find_stack_pids); do kill -9 "$pid" 2>/dev/null || true; done
+      wait_stack_gone 20 || fail "기존 스택 프로세스가 종료되지 않음 — 수동 확인 필요 (lsof -d cwd로 packages/* 프로세스 확인)"
+    fi
+  fi
+
+  # ③ 죽은 dev.sh가 남긴 고아 tail (KILL 폴백 시 trap이 못 거둠)
+  for pid in $(pgrep -f "tail .*${logs_dir}/server\.log" 2>/dev/null || true); do
+    is_self_or_ancestor "$pid" || kill -9 "$pid" 2>/dev/null || true
+  done
 }
 
 stop_previous_stack
