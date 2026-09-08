@@ -108,7 +108,10 @@ sequenceDiagram
   Agent가 터널로 바이너리 푸시 (실기기 검증 완료. 초기의 XCUITest 스크린샷 폴링 폴백은 폐기)
 - **웹 콘솔**: React + TypeScript + Vite, WebCodecs `VideoDecoder`로 H.264 디코딩 (실기기 검증 완료)
 - **저장소**: SQLite (레지스트리 + 점유 상태)
-- **레포 구조**: pnpm workspace + Nx 모노레포 (`server` / `agent` / `shared` / `web`) +
+- **SDK/CLI**: `@nebula/client` — OpenAPI 스펙(`packages/server/openapi.json`)에서
+  openapi-typescript로 타입만 생성 + 얇은 fetch 래퍼 (브라우저·Node 공용, 웹 콘솔도 이것을 소비).
+  `@nebula/cli` — 그 위에 구축한 `nebula` 커맨드 (의존성 없는 node:util parseArgs)
+- **레포 구조**: pnpm workspace + Nx 모노레포 (`server` / `agent` / `shared` / `web` / `client` / `cli`) +
   `controller-ios` (Swift, XcodeGen — workspace 밖)
 
 ## 실행 환경 요구사항
@@ -122,26 +125,62 @@ sequenceDiagram
 
 ## 실행 방법
 
-### tmux로 한 번에 실행
+### 한 번에 실행 (개발 세션)
 
 서버와 Agent의 `.env`를 최초 한 번 준비한 뒤 루트에서 실행한다.
 
 ```bash
 cp packages/server/.env.example packages/server/.env
 cp packages/agent/.env.example packages/agent/.env
-# 두 .env의 토큰과 Agent의 Controller·미러링 경로를 실제 환경에 맞게 수정
+# 두 .env의 토큰을 실제 값으로 수정 (openssl rand -hex 32, 두 토큰은 서로 다르게)
 
-pnpm dev          # server / agent / web / Controller 로그를 tmux pane으로 실행
-pnpm dev:stop     # Controller 자식 프로세스까지 정상 종료
-pnpm dev:restart  # 전체 재시작
+pnpm dev           # 빌드 → 서버 → Agent → 웹 콘솔, 로그는 한 화면 (= scripts/dev.sh)
+pnpm dev -- --fake # 기기 없이 — 정적 가짜 기기로 서버·웹 파이프라인만
 ```
 
-이미 `nebula` 세션이 실행 중이면 `pnpm dev`는 새 프로세스를 만들지 않고 기존 세션에 연결한다.
-tmux에서는 `Ctrl-b d`로 프로세스를 유지한 채 세션에서 빠져나올 수 있다.
-이 명령은 Agent에 iOS Controller 프로젝트와 미러링 헬퍼 경로를 자동으로 주입한다. 따라서 Agent가
-`xcodebuild`, `iproxy`, 미러링 헬퍼를 함께 실행하고 죽은 프로세스를 감시하여 재시작한다. 실행 전에
-`controller-ios/NebulaController.xcodeproj`와 `mirror-helper/.build/debug/mirror-helper`가 준비되어
-있어야 하며, 없으면 필요한 준비 명령을 안내하고 종료한다.
+- 종료는 Ctrl-C 한 번 (Agent가 러너·iproxy·헬퍼까지 정리)
+- **재실행하면 기존 스택을 자동 종료하고 새로 시작**한다
+- 수퍼바이저·미러링 설정이 .env에 없으면 저장소 기준 기본값을 자동 주입하고,
+  mirror-helper 미빌드 시 빌드를 시도한다 (실패해도 미러링만 빠진 채 진행)
+
+### 상시 데몬으로 실행 (launchd 자동 복구)
+
+로그인 시 자동 기동 + 크래시 시 자동 재기동이 필요하면 launchd LaunchAgent로 설치한다.
+
+```bash
+scripts/daemon.sh install    # 빌드 → plist 설치(~/Library/LaunchAgents) → 기동
+scripts/daemon.sh status     # pid·마지막 종료 코드
+scripts/daemon.sh restart
+scripts/daemon.sh uninstall
+```
+
+- 서버·Agent 프로세스가 죽으면 launchd가 10초 간격(ThrottleInterval)으로 되살린다
+- `dev.sh`(개발 세션)와 동시 사용 불가 — dev.sh가 감지하고 거부함
+- 로그: `.dev-logs/daemon-{server,agent}.log` (로테이션 없음 — 백로그)
+
+### CLI
+
+```bash
+export NEBULA_SERVER_URL=http://localhost:3000
+export NEBULA_CLIENT_TOKEN=<서버 .env의 NEBULA_CLIENT_TOKEN>
+
+pnpm cli devices list
+pnpm cli devices occupy --platform ios     # 점유 — 세션이 ~/.nebula/session.json에 저장됨
+pnpm cli tap --x 200 --y 400               # 이후 커맨드는 기기·occupantId 생략 가능
+pnpm cli screenshot --out shot.jpg
+pnpm cli devices keepalive                 # 명령 없이 오래 점유할 때 (sliding TTL 연장)
+pnpm cli devices release
+```
+
+전체 커맨드·플래그·종료 코드는 [packages/cli/README.md](./packages/cli/README.md) 참고.
+
+### OpenAPI 스펙과 클라이언트 생성
+
+- 스펙은 코드 우선: 서버 데코레이터 → `packages/server/openapi.json`(커밋 산출물) →
+  `@nebula/client`의 생성 타입(`src/generated/api-schema.ts`, 커밋 산출물)
+- **서버 API를 바꾸면 `pnpm openapi`로 재생성**해야 한다 — 안 하면 서버·client의
+  드리프트 테스트가 실패한다 (생성물은 손으로 고치지 말 것)
+- `ENABLE_DOCS=true`면 같은 문서가 `/docs`(Swagger UI)로도 노출된다
 
 ### 개별 실행
 
@@ -189,8 +228,13 @@ cd packages/web && pnpm start:dev   # 설정 패널에 서버 주소·클라이�
       H.264 단독 상시 구동(pre-warm) — 초기의 JPEG 스크린샷 폴백(3.5fps)은 느려서 제거.
       macOS 26 함정 2개(DiscoverySession 미노출 → CMIO UID 직접 열기, 최초 발행 트리거)는
       mirror-helper/README.md 참고 — 콜드 스타트 자가 발행은 미검증
-- [ ] **Phase 4 — 확장**: CLI/SDK (생성된 OpenAPI 스펙에서 클라이언트 생성), 프로세스 자동 복구,
-      점유 만료(타임아웃) 처리
+- [x] **Phase 4 — 확장** (2026-09-08):
+      ① **점유 만료(sliding TTL)** — 활동(점유·명령·keepalive) 기준 10분 TTL, 30초 스윕이 회수.
+      기기는 online 유지(즉시 재점유 가능), 만료 시 스트림 시청자는 4408로 종료. 웹은 30초 keepalive 자동
+      ② **CLI/SDK** — openapi.json(코드 우선 생성) → openapi-typescript 타입 → `@nebula/client`
+      (웹 콘솔도 소비) → `nebula` CLI (점유 세션 파일, 종료 코드 규약)
+      ③ **프로세스 자동 복구** — launchd LaunchAgent(`scripts/daemon.sh`)로 서버·Agent 상시화
+      (자식 프로세스 복구는 Phase 2.5에서 완료). launchd 실설치 검증은 미실시
 
 ## 원문 대비 의도적 생략
 

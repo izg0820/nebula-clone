@@ -19,8 +19,11 @@ packages/server   # @nebula/server — NestJS 오케스트레이션 (명령 프�
 packages/agent    # @nebula/agent — 맥 데몬: 발견·터널·수퍼바이저·스트림 캡처 (프레임워크 금지)
 packages/shared   # @nebula/shared — WS 프로토콜·액션·프레임 코덱 (server/agent/web 공용)
 packages/web      # @nebula/web — React 콘솔 (기기 목록·점유·미러링 뷰·클릭 탭)
+packages/client   # @nebula/client — SDK: openapi.json 생성 타입 + fetch 래퍼 (웹·CLI 공용, 런타임 deps 0)
+packages/cli      # @nebula/cli — nebula 커맨드 (client에만 의존, node:util parseArgs)
 controller-ios/   # Swift/XCUITest + XcodeGen — 실기기 검증 완료
 mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보류 (README 참고)
+deploy/launchd/   # LaunchAgent 템플릿 — scripts/daemon.sh가 치환·설치 (상시 데몬)
 ```
 
 - Nx는 package-based 모드 — `project.json` 만들지 말 것. 각 패키지 `package.json` 스크립트가 태스크
@@ -62,14 +65,31 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
 - **도메인 vs 공개 타입 분리**: `Device`(내부, `occupantId` 포함) ↔ `PublicDevice`(응답용).
   `occupantId`는 해제 권한 비밀값 — **점유 응답 외 어떤 API 응답에도 노출 금지**
 - **점유 모델**: `tryOccupy`는 SQLite 트랜잭션으로 원자적 (better-sqlite3 동기 + 단일 스레드 전제).
-  Agent 단선(`markAgentOffline`)은 점유를 **유지**(터널 블립 유예), 점유 해제는 하트비트 만료
-  스윕(`markStaleOffline`)에서만 — offline+점유 잔존 기기도 스윕이 회수 (영구 점유 방지)
+  Agent 단선(`markAgentOffline`)은 점유를 **유지**(터널 블립 유예), 회수 경로는 둘 —
+  하트비트 만료 스윕(`markStaleOffline`, offline 처리)과 유휴 만료 스윕(`expireIdleOccupations`)
+- **점유 sliding TTL** (기본 10분, `NEBULA_OCCUPATION_TTL_MS`): 갱신 지점은 occupy / 명령 실행 /
+  `POST /devices/:id/keepalive` **셋뿐** — Agent 하트비트·스트림 시청은 활동으로 치지 않는다
+  (켜둔 탭이 점유를 영구화하면 원래 버그와 동형). 같은 이유로 웹 keepalive도 무조건 반복이 아니라
+  **사용자 입력 기준 30분 유휴 상한**(`KEEPALIVE_IDLE_LIMIT_MS`)에서 중단 — 방치 탭은 서버가 회수.
+  유휴 만료는 `status`를 바꾸지 않아 즉시 재점유 가능.
+  불변식: `occupant_id`와 `last_activity_at`은 항상 함께 설정/해제. 만료 시 시청자는 4408로 종료
+- **DB 마이그레이션**: `CREATE TABLE IF NOT EXISTS`는 기존 파일에 컬럼을 추가하지 않음 —
+  컬럼 추가 시 `ensureDeviceColumns`(PRAGMA table_info + ALTER TABLE + 백필)에 반드시 등록
+- **모듈 방향**: Streams → Devices 의존이 존재. 역방향 호출 금지(순환) — Devices의 결과로 Streams를
+  움직여야 하면 `OccupancyModule`처럼 양쪽을 import하는 조립 모듈에서 배선 (CommandsModule과 같은 패턴)
 - **스트림 인가**: `/stream` 시청은 점유자 전용 — `occupantId` 쿼리 검증 (불일치 4403)
 - **WS 게이트웨이**: 연결 시 `NEBULA_AGENT_TOKEN` 검증(실패 4401), agentId 형식 `[A-Za-z0-9_-]{1,64}`(위반 4400),
   중복 agentId는 기존 소켓 4409 대체. disconnect 처리 전 "현행 소켓인지" 확인 필수
 - **저장소 접근은 `DevicesRepository` 인터페이스로만** — Redis 등 교체 대비. 구현체 직접 주입 금지
 - Swagger는 `ENABLE_DOCS=true`일 때만 (전역 가드를 타지 않는 Express 직등록 라우트라 무인증 노출됨)
-- 환경 변수: `.env.example` 참고. 토큰 24자 미만·`change-me*`는 기동 거부가 정상 동작
+- 환경 변수: `.env.example` 참고. 토큰 24자 미만·`change-me*`·두 토큰 동일값은 기동 거부가 정상 동작
+- **OpenAPI 생성물 규칙**: 서버 API 변경 시 `pnpm openapi` 필수 — `packages/server/openapi.json`과
+  `packages/client/src/generated/api-schema.ts`는 커밋 산출물이며 **손으로 수정 금지**
+  (서버·client의 드리프트 테스트가 어긋남을 실패로 강제). 응답은 반드시 클래스 DTO + @ApiOkResponse —
+  interface/mapped type 반환은 스펙에서 빈 스키마가 됨 (스펙 테스트가 차단)
+- **웹은 API 타입을 재선언하지 말고 `@nebula/client`만 소비** (드리프트 원인 소거).
+  vite/vitest에서 CJS 워크스페이스 패키지는 optimizeDeps.include + commonjsOptions.include +
+  test.server.deps.inline 3종에 등록해야 named import가 동작
 
 ## 빌드·테스트 함정 (겪은 것들)
 
@@ -80,7 +100,7 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
   `packages/server/node_modules/...` 경로 사용
 - 스모크 테스트: 서버를 `DB_PATH=':memory:'`로 띄우고 가짜 Agent(ws 클라이언트)로 register→occupy→release 검증
 
-## 현재 상태 (2026-09-04)
+## 현재 상태 (2026-09-08)
 
 - **Phase 1 완료**: 서버(occupy/release/레지스트리/인증/하트비트 만료/rate limit) + Agent(기기 발견,
   WS 터널, 백오프 재연결, ping keepalive). 리뷰(내부 Opus + Codex) HIGH 전부 반영
@@ -97,8 +117,6 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
   `controller-ready` 태그. 모드 선택: `NEBULA_XCODEBUILD_ENABLED=true`(수퍼바이저) vs
   `NEBULA_CONTROLLER_PORTS`(수동 러너). 기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES`.
   미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
-- **알려진 이슈**: 점유 TTL 없음 — 점유자(occupantId 분실) 사라지면 기기가 잠김, 러너 재기동과
-  무관하게 유지됨. Phase 4 점유 만료 처리로 해결 예정 (실사용에서 실제로 겪음)
 - **Phase 3 완료 (H.264 미러링, 원문 방식)**: 실측 **40fps/8KB/frame**. 파이프라인:
   mirror-helper(캡처 장치→VideoToolbox H.264) → Agent H264Stream(stdout 패킷 파싱) →
   터널 바이너리 프레임 → StreamsRelay → 브라우저 WebCodecs. **H.264 단독** — Agent가 기기 발견
@@ -108,11 +126,25 @@ mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보
   ② 최초 발행이 QuickTime 소스 열람으로 트리거됨 — 발행 후엔 QuickTime 종료해도 유지되나
   **콜드 스타트(재연결·재부팅) 자가 발행 미검증** (안 되면 QuickTime 활성화 킥 필요, 백로그).
   탭 좌표는 pt 기준이라 웹이 점유 직후 스크린샷 1회로 pt 크기 확보 후 비율 환산
+- **Phase 4 완료** (2026-09-08): ① 점유 sliding TTL (알려진 이슈였던 "occupantId 분실 시 영구 잠김"
+  해소 — 위 "서버 핵심 규칙" 참고) ② OpenAPI 파이프라인 + `@nebula/client`(웹 수렴) + `nebula` CLI
+  ③ launchd 상시 데몬(`scripts/daemon.sh`) + 서버 크래시 안전망. **launchd 실설치 검증은 미실시**
+- **성능 실측** (2026-09-08, 순차·localhost): 저장소 renewOccupation 0.02ms / 서버+터널 오버헤드
+  p50 4.4ms(가짜 Controller) / 실기기 탭 왕복 p50 **301ms** (저수준 이벤트 합성 도입 전 755ms —
+  controller-ios/README 참고), ui-dump 397ms, screenshot 202ms / 미러링 53~59fps.
+  탭의 남은 ~250ms는 XCTest 이벤트 합성 XPC 내부 — 원문 52ms까지는 미달 (후속 과제)
+- **러너 이벤트 경로**: 탭·스와이프는 EventSynthesizer(비공개 API) 우선 + XCUI 폴백.
+  completion 블록은 `(Bool, NSError?)` — 시그니처 다르면 SIGSEGV (실기기 크래시 리포트로 확정,
+  Xcode/iOS 업그레이드 시 재검증 필요)
 - **실기기 연결 참고**: devicectl·usbmuxd·XCUITest는 Wi-Fi로도 동작 (실제로 무선으로 전 파이프라인
   동작 확인됨). 단 미러링 캡처 장치는 USB 필수였음
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,
   Controller HTTP 직렬 큐 head-of-line(캡처 중 /health 지연 → 수퍼바이저 오탐 재기동 가능),
-  스크린샷 인코딩이 러너 메인 스레드 점유, 점유 TTL 부재, 웹 컴포넌트 테스트 환경(jsdom) 부재
+  스크린샷 인코딩이 러너 메인 스레드 점유, 수퍼바이저·헬퍼 재기동 상한/서킷 브레이커 부재,
+  iproxy만 죽어도 러너 전체 재빌드, 재기동 경로 포트 쿨다운 미적용, 서버→Agent 방향 keepalive 부재,
+  백오프 지터 없음, 7일 프로비저닝 만료가 무한 재기동 루프로 귀결(식별·알림 없음),
+  launchd 데몬 로그 로테이션 없음, mirror-helper --name 매칭(동명 기기 구분 불가 — --udid 미구현),
+  agent 테스트가 nx 병렬 실행에서 간헐 플레이크(단독 실행은 항상 그린 — 타이밍 계열 추정, 미확정)
 
 ## 이 프로젝트만의 주의
 
