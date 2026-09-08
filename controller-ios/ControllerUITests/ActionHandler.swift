@@ -56,13 +56,20 @@ final class ActionHandler {
     private let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
     /// 기준 좌표 캐시 — 탭마다 앱 요소 해석(스냅샷 비용)을 반복하지 않도록
     private lazy var origin = springboard.coordinate(withNormalizedOffset: .zero)
+    /// WDA 방식 저수준 합성 (실측 탭 755ms → 목표 수십 ms) — 해석 실패 시 nil = XCUI 단독
+    private let synthesizer = EventSynthesizer.make()
 
     func tap(x: Double, y: Double) {
+        if let synthesizer, synthesizer.tap(x: x, y: y) { return }
         coordinate(x: x, y: y).tap()
     }
 
     /// durationMs를 드래그 속도(pt/s)로 환산 — 요청한 시간에 근접한 스와이프
     func swipe(fromX: Double, fromY: Double, toX: Double, toY: Double, durationMs: Double) {
+        if let synthesizer,
+           synthesizer.swipe(fromX: fromX, fromY: fromY, toX: toX, toY: toY, durationMs: durationMs) {
+            return
+        }
         let start = coordinate(x: fromX, y: fromY)
         let end = coordinate(x: toX, y: toY)
 

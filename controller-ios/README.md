@@ -3,6 +3,12 @@
 XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스팅하는 기기 제어부 (WebDriverAgent 방식).
 **실기기 검증 완료 (2026-09-07)** — 탭·스와이프·입력·UI 덤프·스크린샷·홈 버튼 전 구간 실동작.
 
+탭·스와이프는 **저수준 이벤트 합성**(`EventSynthesizer` — XCSynthesizedEventRecord를
+XCTRunnerDaemonSession에 직접 주입, WDA 방식)을 우선 사용하고 실패 시 XCUICoordinate로 폴백.
+실측(2026-09-08, iOS 26.6.1): 서버 API 기준 탭 왕복 755ms → **301ms** (XCUI 경로의 접근성 스냅샷
+2회 + interruption 체크 + 후처리를 우회). 비공개 API 주의: completion 블록 시그니처는
+`(Bool, NSError?)` — `(NSError?)`로 받으면 BOOL 인자를 retain하다 SIGSEGV (크래시 리포트로 확정).
+
 ## HTTP 계약 (Agent의 ControllerClient와 일치해야 함)
 
 | 경로 | 본문 | 응답 |
