@@ -12,3 +12,4 @@ controller-ios/NebulaController.xcodeproj/
 controller-ios/local.yml
 controller-ios/Host/Info.plist
 mirror-helper/.build/
+.dev-logs/
