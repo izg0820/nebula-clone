@@ -15,6 +15,8 @@ export interface StreamManagerOptions {
  */
 export class StreamManager {
   private readonly streams = new Map<string, H264Stream>();
+  /** stopAll로 종료 신호를 보낸 스트림 — awaitTermination 대기 대상 */
+  private readonly stopped: H264Stream[] = [];
 
   constructor(
     private readonly sendFrame: (frame: AgentFrame) => boolean,
@@ -38,7 +40,19 @@ export class StreamManager {
   }
 
   stopAll(): void {
-    for (const deviceId of [...this.streams.keys()]) this.stop(deviceId);
+    for (const [deviceId, stream] of [...this.streams]) {
+      stream.stop();
+      this.streams.delete(deviceId);
+      // shutdown 전용 수집 — 개별 stop(기기 분리)은 Agent가 계속 살아 에스컬레이션 타이머가 처리
+      this.stopped.push(stream);
+      logger.info({ deviceId }, 'H.264 미러링 중지');
+    }
+  }
+
+  /** stopAll 후 헬퍼들이 실제로 죽을 때까지 대기 — Agent exit 전 고아 방지 */
+  async awaitTermination(maxWaitMs: number): Promise<void> {
+    await Promise.all(this.stopped.map((stream) => stream.awaitTermination(maxWaitMs)));
+    this.stopped.length = 0;
   }
 
   /** 기기 이름 미상이면 보류 — 다음 발견 주기에 재시도됨 */

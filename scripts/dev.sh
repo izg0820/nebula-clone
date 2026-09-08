@@ -148,6 +148,13 @@ cleanup() {
   for pid in "${pids[@]}"; do
     for _ in $(seq 1 60); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
   done
+  # 이중 방어 — Agent graceful이 못 거둔 자식(mirror-helper 등)이 남았으면 강제 정리
+  local leftover
+  leftover="$(find_stack_pids)"
+  if [ -n "$leftover" ]; then
+    blue "잔존 프로세스 강제 정리: $(echo "$leftover" | tr '\n' ' ')"
+    for pid in $leftover; do kill -9 "$pid" 2>/dev/null || true; done
+  fi
   rm -f "$pid_file"
   blue "정리 완료"
 }

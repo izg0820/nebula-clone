@@ -131,9 +131,13 @@ async function main(): Promise<void> {
     streamManager?.stopAll();
     supervisor?.stopAll();
     tunnel.close();
-    // 즉시 exit 금지 — detached 자식(xcodebuild·iproxy)이 고아로 남아 포트 점유함
+    // 즉시 exit 금지 — 자식(xcodebuild·iproxy·mirror-helper)이 고아로 남음.
+    // 헬퍼도 반드시 대기: SIGTERM 미응답 시 SIGKILL 에스컬레이션이 unref 타이머라 exit하면 소멸됨
     void (async (): Promise<void> => {
-      await supervisor?.awaitTermination(SHUTDOWN_GRACE_MS);
+      await Promise.all([
+        supervisor?.awaitTermination(SHUTDOWN_GRACE_MS),
+        streamManager?.awaitTermination(SHUTDOWN_GRACE_MS),
+      ]);
       process.exit(0);
     })();
   };

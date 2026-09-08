@@ -60,6 +60,8 @@ export interface H264StreamConfig {
  */
 export class H264Stream {
   private child: ChildProcess | null = null;
+  /** 종료 신호를 보냈지만 exit 확인 전인 헬퍼 — awaitTermination 대기 대상 */
+  private terminatingChild: ChildProcess | null = null;
   private isActive = false;
   private restartTimer: NodeJS.Timeout | null = null;
   private resolutionTimer: NodeJS.Timeout | null = null;
@@ -91,6 +93,7 @@ export class H264Stream {
     this.child = null;
     if (!child) return;
 
+    this.terminatingChild = child;
     child.kill('SIGTERM');
     const escalation = setTimeout(() => {
       if (child.exitCode !== null || child.signalCode !== null) return;
@@ -98,6 +101,26 @@ export class H264Stream {
       child.kill('SIGKILL');
     }, KILL_ESCALATION_MS);
     escalation.unref();
+  }
+
+  /**
+   * stop 후 헬퍼가 실제로 죽을 때까지 대기 — Agent가 먼저 exit하면 unref된
+   * SIGKILL 에스컬레이션 타이머가 소멸해 SIGTERM 미응답 헬퍼가 고아로 남음 (실사용에서 겪음)
+   */
+  async awaitTermination(maxWaitMs: number): Promise<void> {
+    const child = this.terminatingChild;
+    if (!child) return;
+    const deadline = Date.now() + maxWaitMs;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || child.signalCode !== null) {
+        this.terminatingChild = null;
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    logger.warn({ deviceId: this.config.deviceId }, '헬퍼 종료 대기 초과 — SIGKILL');
+    child.kill('SIGKILL');
+    this.terminatingChild = null;
   }
 
   private launch(): void {
