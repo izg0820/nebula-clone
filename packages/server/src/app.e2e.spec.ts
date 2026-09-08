@@ -68,4 +68,23 @@ describe('App e2e (실배선)', () => {
       .send({})
       .expect(409);
   });
+
+  test('keepalive — 토큰 없으면 401, occupantId 누락 400, 미존재 기기 404', async () => {
+    await request(app.getHttpServer())
+      .post('/devices/u1/keepalive')
+      .send({ occupantId: 'o' })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/devices/u1/keepalive')
+      .set('Authorization', `Bearer ${CLIENT_TOKEN}`)
+      .send({})
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post('/devices/없는기기/keepalive')
+      .set('Authorization', `Bearer ${CLIENT_TOKEN}`)
+      .send({ occupantId: 'o' })
+      .expect(404);
+  });
 });

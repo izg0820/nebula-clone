@@ -36,6 +36,18 @@ export class StreamsRelayService {
     this.viewers.delete(deviceId);
   }
 
+  /** 해당 기기 시청자 전원 강제 종료 — 점유 만료 등 인가 상실 시 */
+  closeViewers(deviceId: string, code: number, reason: string): void {
+    const sockets = this.viewers.get(deviceId);
+    if (!sockets) return;
+    for (const socket of sockets) {
+      if (socket.readyState !== socket.OPEN) continue;
+      socket.close(code, reason);
+    }
+    // 뒤늦은 removeViewer는 no-op이라 안전
+    this.viewers.delete(deviceId);
+  }
+
   /** Agent 프레임을 해당 기기 시청자 전원에게 전달 */
   broadcast(frame: AgentFrame): void {
     const sockets = this.viewers.get(frame.deviceId);

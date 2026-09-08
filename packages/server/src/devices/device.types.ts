@@ -22,6 +22,8 @@ export interface Device {
   readonly occupiedAt: string | null;
   /** 마지막 하트비트 시각 (ISO) */
   readonly lastHeartbeatAt: string | null;
+  /** 마지막 점유 활동 시각 (ISO, 미점유 시 null) — sliding TTL 기준 */
+  readonly lastActivityAt: string | null;
 }
 
 /** 클라이언트 응답용 디바이스 — 해제 비밀값인 occupantId 제외 */
@@ -41,5 +43,11 @@ export interface OccupyFilter {
   readonly deviceId?: string;
 }
 
+/** 점유 조작 실패 사유 (해제·연장 공용) */
+export type OccupationFailure = 'not_found' | 'not_occupied' | 'forbidden';
+
 /** 해제 결과 */
-export type ReleaseResult = 'released' | 'not_found' | 'not_occupied' | 'forbidden';
+export type ReleaseResult = 'released' | OccupationFailure;
+
+/** 점유 활동 연장 결과 */
+export type RenewResult = 'renewed' | OccupationFailure;

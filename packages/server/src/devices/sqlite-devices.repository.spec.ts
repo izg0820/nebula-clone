@@ -171,4 +171,100 @@ describe('SqliteDevicesRepository', () => {
     expect(repository.markStaleOffline(CUTOFF_BEFORE_NOW)).toEqual([]);
     expect(repository.findById(iphone.id)?.status).toBe('online');
   });
+
+  test('tryOccupy는 lastActivityAt을 점유 시각으로 초기화', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+
+    const device = repository.tryOccupy({}, 'occupant-1', NOW);
+
+    expect(device?.lastActivityAt).toBe(NOW);
+  });
+
+  test('renewOccupation은 occupantId 일치 시에만 활동 시각 갱신', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    const LATER = '2026-09-04T00:05:00.000Z';
+
+    expect(repository.renewOccupation(iphone.id, 'wrong', LATER)).toBe('forbidden');
+    expect(repository.findById(iphone.id)?.lastActivityAt).toBe(NOW);
+
+    expect(repository.renewOccupation(iphone.id, 'occupant-1', LATER)).toBe('renewed');
+    expect(repository.findById(iphone.id)?.lastActivityAt).toBe(LATER);
+  });
+
+  test('renewOccupation은 미점유·미존재 기기를 구분', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+
+    expect(repository.renewOccupation('없는-기기', 'o1', NOW)).toBe('not_found');
+    expect(repository.renewOccupation(iphone.id, 'o1', NOW)).toBe('not_occupied');
+  });
+
+  test('renewOccupation은 offline 기기도 연장 가능 (터널 블립 중 점유 유지)', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    repository.markAgentOffline(AGENT_ID);
+    const LATER = '2026-09-04T00:05:00.000Z';
+
+    expect(repository.renewOccupation(iphone.id, 'occupant-1', LATER)).toBe('renewed');
+    expect(repository.findById(iphone.id)?.lastActivityAt).toBe(LATER);
+  });
+
+  test('expireIdleOccupations는 유휴 점유만 회수하고 status·agentId는 유지', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    const CUTOFF_AFTER_NOW = '2026-09-04T00:11:00.000Z';
+
+    const expiredIds = repository.expireIdleOccupations(CUTOFF_AFTER_NOW);
+
+    expect(expiredIds).toEqual([iphone.id]);
+    const device = repository.findById(iphone.id);
+    expect(device?.occupantId).toBeNull();
+    expect(device?.occupiedAt).toBeNull();
+    expect(device?.lastActivityAt).toBeNull();
+    expect(device?.status).toBe('online');
+    expect(device?.agentId).toBe(AGENT_ID);
+  });
+
+  test('expireIdleOccupations는 cutoff 이후 활동한 점유를 건드리지 않음', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    repository.renewOccupation(iphone.id, 'occupant-1', '2026-09-04T00:10:00.000Z');
+    const CUTOFF_BETWEEN = '2026-09-04T00:05:00.000Z';
+
+    expect(repository.expireIdleOccupations(CUTOFF_BETWEEN)).toEqual([]);
+    expect(repository.findById(iphone.id)?.occupantId).toBe('occupant-1');
+  });
+
+  test('expireIdleOccupations는 활동 시각 없는 점유(알 수 없는 상태)를 회수', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    // 수동 DB 조작 등으로 활동 시각만 소실된 상태 재현
+    databaseService.connection
+      .prepare('UPDATE devices SET last_activity_at = NULL WHERE id = ?')
+      .run(iphone.id);
+
+    expect(repository.expireIdleOccupations('2026-09-03T00:00:00.000Z')).toEqual([iphone.id]);
+  });
+
+  test('만료 회수 직후 같은 기기를 즉시 재점유 가능', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    repository.expireIdleOccupations('2026-09-04T00:11:00.000Z');
+
+    const reoccupied = repository.tryOccupy({}, 'occupant-2', '2026-09-04T00:12:00.000Z');
+
+    expect(reoccupied?.occupantId).toBe('occupant-2');
+  });
+
+  test('release·markStaleOffline은 lastActivityAt도 NULL로 되돌림 (동시 설정/해제 불변식)', () => {
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-1', NOW);
+    repository.release(iphone.id, 'occupant-1');
+    expect(repository.findById(iphone.id)?.lastActivityAt).toBeNull();
+
+    repository.upsertMany([iphone], AGENT_ID, NOW);
+    repository.tryOccupy({}, 'occupant-2', NOW);
+    repository.markStaleOffline('2026-09-04T00:02:00.000Z');
+    expect(repository.findById(iphone.id)?.lastActivityAt).toBeNull();
+  });
 });

@@ -31,6 +31,10 @@ export class CommandsService {
       throw new ConflictException('기기 오프라인');
     }
 
+    // 명령 = 점유 활동. 전송 전에 갱신해야 장시간 명령(최대 15초) 중 스윕에 회수되지 않고,
+    // getById→여기 사이에 점유가 바뀐 레이스도 여기서 403으로 차단됨
+    this.devicesService.renewOccupation(deviceId, occupantId);
+
     const outcome = await this.sendToAgent(device.agentId, deviceId, action);
     if (!outcome.ok && outcome.error === COMMAND_ERROR_UNSUPPORTED) {
       throw new BadRequestException('Agent가 지원하지 않는 액션 (Agent 업데이트 필요)');

@@ -11,6 +11,7 @@ const DEVICE: Device = {
   occupantId: 'secret-occupant',
   occupiedAt: '2026-09-04T00:00:00.000Z',
   lastHeartbeatAt: '2026-09-04T00:00:00.000Z',
+  lastActivityAt: '2026-09-04T00:00:00.000Z',
 };
 
 describe('toPublicDevice', () => {

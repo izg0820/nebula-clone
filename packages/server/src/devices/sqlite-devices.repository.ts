@@ -8,6 +8,7 @@ import {
   OccupyFilter,
   RegisterDeviceInput,
   ReleaseResult,
+  RenewResult,
 } from './device.types';
 import { DevicesRepository } from './devices.repository';
 
@@ -23,6 +24,7 @@ interface DeviceRow {
   occupant_id: string | null;
   occupied_at: string | null;
   last_heartbeat_at: string | null;
+  last_activity_at: string | null;
 }
 
 /** row → 도메인 객체 변환 */
@@ -38,6 +40,7 @@ function toDevice(row: DeviceRow): Device {
     occupantId: row.occupant_id,
     occupiedAt: row.occupied_at,
     lastHeartbeatAt: row.last_heartbeat_at,
+    lastActivityAt: row.last_activity_at,
   };
 }
 
@@ -119,10 +122,10 @@ export class SqliteDevicesRepository implements DevicesRepository {
       // 트랜잭션 내부라 candidate 조회 후 갱신까지 원자적
       const result = this.db
         .prepare(
-          `UPDATE devices SET occupant_id = ?, occupied_at = ?
+          `UPDATE devices SET occupant_id = ?, occupied_at = ?, last_activity_at = ?
            WHERE id = ? AND occupant_id IS NULL AND status = 'online'`,
         )
-        .run(occupantId, nowIso, candidate.id);
+        .run(occupantId, nowIso, nowIso, candidate.id);
       if (result.changes !== 1) return null;
 
       return this.findById(candidate.id);
@@ -138,11 +141,52 @@ export class SqliteDevicesRepository implements DevicesRepository {
       if (device.occupantId !== occupantId) return 'forbidden';
 
       this.db
-        .prepare('UPDATE devices SET occupant_id = NULL, occupied_at = NULL WHERE id = ?')
+        .prepare(
+          'UPDATE devices SET occupant_id = NULL, occupied_at = NULL, last_activity_at = NULL WHERE id = ?',
+        )
         .run(deviceId);
       return 'released';
     });
     return releaseTx();
+  }
+
+  renewOccupation(deviceId: string, occupantId: string, nowIso: string): RenewResult {
+    const renewTx = this.db.transaction((): RenewResult => {
+      const device = this.findById(deviceId);
+      if (!device) return 'not_found';
+      if (!device.occupantId) return 'not_occupied';
+      if (device.occupantId !== occupantId) return 'forbidden';
+
+      // status 조건 없음 — 터널 블립(offline)에도 점유는 유지되므로 연장 가능
+      this.db
+        .prepare('UPDATE devices SET last_activity_at = ? WHERE id = ? AND occupant_id = ?')
+        .run(nowIso, deviceId, occupantId);
+      return 'renewed';
+    });
+    return renewTx();
+  }
+
+  expireIdleOccupations(cutoffIso: string): string[] {
+    const expireTx = this.db.transaction((): string[] => {
+      // last_activity_at IS NULL인 점유는 알 수 없는 상태 — 잠김이 아니라 회수 쪽으로 기움
+      const rows = this.db
+        .prepare(
+          `SELECT id FROM devices
+           WHERE occupant_id IS NOT NULL
+             AND (last_activity_at IS NULL OR last_activity_at < ?)`,
+        )
+        .all(cutoffIso) as Array<{ id: string }>;
+      if (rows.length === 0) return [];
+
+      const ids = rows.map((row) => row.id);
+      const reclaim = this.db.prepare(
+        // status·agent_id는 유지 — 유휴 만료는 사람 이탈이지 기기 소실이 아님 (즉시 재점유 가능)
+        'UPDATE devices SET occupant_id = NULL, occupied_at = NULL, last_activity_at = NULL WHERE id = ?',
+      );
+      for (const id of ids) reclaim.run(id);
+      return ids;
+    });
+    return expireTx();
   }
 
   heartbeat(deviceIds: readonly string[], agentId: string, nowIso: string): void {
@@ -183,7 +227,7 @@ export class SqliteDevicesRepository implements DevicesRepository {
       const ids = rows.map((row) => row.id);
       const markOffline = this.db.prepare(
         `UPDATE devices
-         SET status = 'offline', occupant_id = NULL, occupied_at = NULL
+         SET status = 'offline', occupant_id = NULL, occupied_at = NULL, last_activity_at = NULL
          WHERE id = ?`,
       );
       for (const id of ids) markOffline.run(id);

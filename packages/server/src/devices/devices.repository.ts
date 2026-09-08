@@ -3,6 +3,7 @@ import {
   OccupyFilter,
   RegisterDeviceInput,
   ReleaseResult,
+  RenewResult,
 } from './device.types';
 
 /** DI 토큰 */
@@ -28,6 +29,18 @@ export interface DevicesRepository {
 
   /** 점유 해제 — occupantId 일치 시에만 성공 */
   release(deviceId: string, occupantId: string): ReleaseResult;
+
+  /**
+   * 점유 활동 시각 갱신 (sliding TTL 연장) — occupantId 일치 시에만 성공.
+   * status 무관: 터널 블립으로 offline인 동안에도 점유는 유지되므로 연장 가능해야 함
+   */
+  renewOccupation(deviceId: string, occupantId: string, nowIso: string): RenewResult;
+
+  /**
+   * 활동이 cutoff 이전인 점유 회수 — 기기 status는 유지 (즉시 재점유 가능)
+   * @return 회수된 기기 ID 목록
+   */
+  expireIdleOccupations(cutoffIso: string): string[];
 
   /** 하트비트 시각 갱신 */
   heartbeat(deviceIds: readonly string[], agentId: string, nowIso: string): void;

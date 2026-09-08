@@ -5,9 +5,10 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import { HEARTBEAT_TIMEOUT_MS } from '../config/constants';
-import { Device, OccupyFilter, RegisterDeviceInput, ReleaseResult } from './device.types';
+import { HEARTBEAT_TIMEOUT_MS, OCCUPATION_TTL_MS } from '../config/constants';
+import { Device, OccupationFailure, OccupyFilter, RegisterDeviceInput } from './device.types';
 import { DEVICES_REPOSITORY, DevicesRepository } from './devices.repository';
 
 /** 점유 성공 결과 */
@@ -16,12 +17,18 @@ export interface OccupyResult {
   readonly device: Device;
 }
 
-/** 해제 실패 결과 → HTTP 예외 매핑 */
-const RELEASE_ERRORS: Record<Exclude<ReleaseResult, 'released'>, () => Error> = {
+/** 점유 조작 실패 → HTTP 예외 매핑 (해제·연장 공용) */
+const OCCUPATION_ERRORS: Record<OccupationFailure, () => Error> = {
   not_found: () => new NotFoundException('기기 없음'),
   not_occupied: () => new ConflictException('점유 상태 아님'),
   forbidden: () => new ForbiddenException('점유자 불일치'),
 };
+
+/** 선택적 env 오버라이드 해석 — 검증은 env.validation이 담당, 여기선 값만 채택 */
+function resolveOccupationTtlMs(raw: string | undefined): number {
+  if (raw === undefined) return OCCUPATION_TTL_MS;
+  return Number(raw);
+}
 
 /**
  * 디바이스 도메인 로직 — Repository 접근은 이 Service로만 일원화
@@ -29,9 +36,14 @@ const RELEASE_ERRORS: Record<Exclude<ReleaseResult, 'released'>, () => Error> = 
  */
 @Injectable()
 export class DevicesService {
+  private readonly occupationTtlMs: number;
+
   constructor(
     @Inject(DEVICES_REPOSITORY) private readonly repository: DevicesRepository,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.occupationTtlMs = resolveOccupationTtlMs(config.get<string>('NEBULA_OCCUPATION_TTL_MS'));
+  }
 
   listAll(): Device[] {
     return this.repository.findAll();
@@ -54,8 +66,31 @@ export class DevicesService {
   /** 점유 해제 — occupantId 불일치 시 403 */
   release(deviceId: string, occupantId: string): Device {
     const result = this.repository.release(deviceId, occupantId);
-    if (result !== 'released') throw RELEASE_ERRORS[result]();
+    if (result !== 'released') throw OCCUPATION_ERRORS[result]();
     return this.getById(deviceId);
+  }
+
+  /** 점유 활동 연장 (sliding TTL) — 불일치 403 / 미점유 409 / 없음 404 */
+  renewOccupation(deviceId: string, occupantId: string): Device {
+    const result = this.repository.renewOccupation(
+      deviceId,
+      occupantId,
+      new Date().toISOString(),
+    );
+    if (result !== 'renewed') throw OCCUPATION_ERRORS[result]();
+    return this.getById(deviceId);
+  }
+
+  /** 활동 없는 점유 회수 — 회수된 기기 ID 반환 (기기 status는 유지) */
+  expireIdleOccupations(): string[] {
+    const cutoffIso = new Date(Date.now() - this.occupationTtlMs).toISOString();
+    return this.repository.expireIdleOccupations(cutoffIso);
+  }
+
+  /** 점유 만료 예정 시각 — 클라이언트가 keepalive 주기를 서버 기준으로 잡게 노출 */
+  occupationExpiresAt(device: Device): string | null {
+    if (!device.lastActivityAt) return null;
+    return new Date(new Date(device.lastActivityAt).getTime() + this.occupationTtlMs).toISOString();
   }
 
   /** Agent 기기 등록 (online 전환) */

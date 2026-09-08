@@ -36,4 +36,39 @@ describe('validateEnv', () => {
       validateEnv({ NEBULA_CLIENT_TOKEN: 'short-token', NEBULA_AGENT_TOKEN: STRONG }),
     ).toThrow(new RegExp(`${MIN_TOKEN_LENGTH}자 미만`));
   });
+
+  test('NEBULA_OCCUPATION_TTL_MS 미설정이면 통과 (기본값 사용)', () => {
+    const config = { NEBULA_CLIENT_TOKEN: STRONG, NEBULA_AGENT_TOKEN: STRONG_OTHER };
+    expect(validateEnv(config)).toBe(config);
+  });
+
+  test('NEBULA_OCCUPATION_TTL_MS 정상값이면 통과', () => {
+    const config = {
+      NEBULA_CLIENT_TOKEN: STRONG,
+      NEBULA_AGENT_TOKEN: STRONG_OTHER,
+      NEBULA_OCCUPATION_TTL_MS: '600000',
+    };
+    expect(validateEnv(config)).toBe(config);
+  });
+
+  test('NEBULA_OCCUPATION_TTL_MS 비정수·하한 미만이면 실패', () => {
+    const base = { NEBULA_CLIENT_TOKEN: STRONG, NEBULA_AGENT_TOKEN: STRONG_OTHER };
+    expect(() => validateEnv({ ...base, NEBULA_OCCUPATION_TTL_MS: 'abc' })).toThrow(
+      /NEBULA_OCCUPATION_TTL_MS.*정수/,
+    );
+    expect(() => validateEnv({ ...base, NEBULA_OCCUPATION_TTL_MS: '1000' })).toThrow(
+      /NEBULA_OCCUPATION_TTL_MS/,
+    );
+  });
+
+  test('NEBULA_RATE_LIMIT_PER_MINUTE — 정상·미설정 통과, 비정수·0 이하 실패', () => {
+    const base = { NEBULA_CLIENT_TOKEN: STRONG, NEBULA_AGENT_TOKEN: STRONG_OTHER };
+    expect(validateEnv({ ...base, NEBULA_RATE_LIMIT_PER_MINUTE: '10000' })).toBeTruthy();
+    expect(() => validateEnv({ ...base, NEBULA_RATE_LIMIT_PER_MINUTE: 'abc' })).toThrow(
+      /NEBULA_RATE_LIMIT_PER_MINUTE/,
+    );
+    expect(() => validateEnv({ ...base, NEBULA_RATE_LIMIT_PER_MINUTE: '0' })).toThrow(
+      /NEBULA_RATE_LIMIT_PER_MINUTE/,
+    );
+  });
 });

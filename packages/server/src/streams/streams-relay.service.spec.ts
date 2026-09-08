@@ -9,6 +9,7 @@ class FakeViewer {
   bufferedAmount = 0;
   isTerminated = false;
   sent: Uint8Array[] = [];
+  closedWith: Array<{ code: number; reason: string }> = [];
 
   send(payload: Uint8Array): void {
     this.sent.push(payload);
@@ -16,6 +17,10 @@ class FakeViewer {
 
   terminate(): void {
     this.isTerminated = true;
+  }
+
+  close(code: number, reason: string): void {
+    this.closedWith.push({ code, reason });
   }
 }
 
@@ -108,6 +113,44 @@ describe('StreamsRelayService', () => {
 
     expect(halfOpen.isTerminated).toBe(true);
     expect(halfOpen.sent).toHaveLength(0);
+  });
+
+  test('closeViewers는 해당 기기 시청자 전원 종료 후 목록에서 제거', () => {
+    const relay = new StreamsRelayService();
+    const first = new FakeViewer();
+    const second = new FakeViewer();
+    const alreadyClosed = new FakeViewer();
+    alreadyClosed.readyState = 3;
+    const otherDevice = new FakeViewer();
+    relay.addViewer('u1', first as unknown as WebSocket);
+    relay.addViewer('u1', second as unknown as WebSocket);
+    relay.addViewer('u1', alreadyClosed as unknown as WebSocket);
+    relay.addViewer('u2', otherDevice as unknown as WebSocket);
+
+    relay.closeViewers('u1', 4408, 'occupation expired');
+
+    expect(first.closedWith).toEqual([{ code: 4408, reason: 'occupation expired' }]);
+    expect(second.closedWith).toEqual([{ code: 4408, reason: 'occupation expired' }]);
+    expect(alreadyClosed.closedWith).toHaveLength(0);
+    expect(otherDevice.closedWith).toHaveLength(0);
+
+    // 제거 확인 — 이후 브로드캐스트가 도달하지 않아야 함
+    relay.broadcast({
+      deviceId: 'u1',
+      format: FRAME_FORMAT_H264,
+      isKey: true,
+      width: 1,
+      height: 1,
+      stampMs: 0,
+      payload: new Uint8Array([0x01]),
+    });
+    expect(first.sent).toHaveLength(0);
+  });
+
+  test('closeViewers는 미등록 기기에 무해', () => {
+    const relay = new StreamsRelayService();
+
+    expect(() => relay.closeViewers('unknown', 4408, 'occupation expired')).not.toThrow();
   });
 
   test('미등록 기기 removeViewer·broadcast는 무해', () => {
