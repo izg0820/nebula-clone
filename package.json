@@ -2,14 +2,14 @@
   "name": "nebula-clone",
   "private": true,
   "scripts": {
-    "dev": "bash scripts/dev-tmux.sh",
-    "dev:stop": "bash scripts/dev-tmux.sh stop",
-    "dev:restart": "bash scripts/dev-tmux.sh restart",
+    "dev": "bash scripts/dev.sh",
     "build": "nx run-many -t build",
     "test": "nx run-many -t test",
     "lint": "nx run-many -t lint",
     "graph": "nx graph",
-    "affected": "nx affected -t build test"
+    "affected": "nx affected -t build test",
+    "openapi": "pnpm --filter @nebula/server openapi && pnpm --filter @nebula/client generate",
+    "cli": "bash scripts/cli.sh"
   },
   "engines": {
     "node": ">=24"
