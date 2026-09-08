@@ -125,15 +125,38 @@ sequenceDiagram
 
 ## 실행 방법
 
-### 한 번에 실행 (개발 세션)
+### 새 맥 온보딩 (최초 1회)
 
-서버와 Agent의 `.env`를 최초 한 번 준비한 뒤 루트에서 실행한다.
+`pnpm dev` 한 방이 되기 전에 스크립트가 대신 못 해주는 단계들. 순서대로:
 
 ```bash
-cp packages/server/.env.example packages/server/.env
-cp packages/agent/.env.example packages/agent/.env
-# 두 .env의 토큰을 실제 값으로 수정 (openssl rand -hex 32, 두 토큰은 서로 다르게)
+# 1) 도구 — Xcode는 App Store에서 전체 설치 (CLT만으로는 xcodebuild·devicectl 불가)
+brew install xcodegen libimobiledevice   # xcodegen: 프로젝트 생성 / libimobiledevice: iproxy
+# Node 24+, pnpm 준비
 
+# 2) 의존성
+git clone <repo> && cd nebula-clone && pnpm install
+
+# 3) 설정 파일 3개 (전부 gitignore — 커밋 안 됨)
+cp packages/server/.env.example packages/server/.env   # 토큰 2개 생성: openssl rand -hex 32 (서로 다르게)
+cp packages/agent/.env.example packages/agent/.env     # 서버 주소 + 같은 Agent 토큰
+cp controller-ios/local.yml.example controller-ios/local.yml   # 본인 Apple Team ID 기입
+
+# 4) Apple 서명 최초 1회 (GUI 필요)
+cd controller-ios && xcodegen generate && open NebulaController.xcodeproj
+#   → Signing에서 Personal Team 지정. 첫 xcodebuild 때 키체인 프롬프트는 반드시 "항상 허용"
+#     ("허용"만 누르면 비대화형 셸에서 errSecInternalComponent로 계속 실패)
+```
+
+기기(iPhone) 쪽: 설정에서 **개발자 모드** 활성화(iOS 16+), 맥 **신뢰**, 러너 설치 동안 **잠금 해제**
+상태 유지. 미러링은 **USB 연결 필수**이고, macOS 26에서는 최초 1회 QuickTime의 동영상 녹화
+소스 목록을 열어 캡처 장치 발행을 트리거해야 할 수 있다 (mirror-helper/README.md).
+
+이후는 아래 `pnpm dev`만 — 빠진 도구·설정은 스크립트가 검사해서 안내한다.
+
+### 한 번에 실행 (개발 세션)
+
+```bash
 pnpm dev           # 빌드 → 서버 → Agent → 웹 콘솔, 로그는 한 화면 (= scripts/dev.sh)
 pnpm dev -- --fake # 기기 없이 — 정적 가짜 기기로 서버·웹 파이프라인만
 ```
