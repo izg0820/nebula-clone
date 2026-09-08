@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nebula Agent LaunchAgent — GUI 세션 필요(codesign 키체인)라 LaunchDaemon이 아닌 LaunchAgent.
+     기동은 scripts/agent-launch.sh 경유 — .env에 없는 수퍼바이저·미러링 기본값을 주입 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nebula.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>{{REPO}}/scripts/agent-launch.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}/packages/agent</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>{{REPO}}/.dev-logs/daemon-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{REPO}}/.dev-logs/daemon-agent.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- xcodebuild·iproxy·mirror-helper 경로 해석용 — launchd 기본 PATH에는 /opt/homebrew/bin이 없음 -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <!-- 설치 시점의 node 절대 경로 — nvm 등 PATH 밖 node 대응 (agent-launch.sh가 사용) -->
+    <key>NEBULA_NODE</key>
+    <string>{{NODE}}</string>
+  </dict>
+</dict>
+</plist>

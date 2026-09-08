@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nebula 서버 LaunchAgent — scripts/daemon.sh install이 {{REPO}}/{{NODE}}를 치환해 설치 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nebula.server</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{NODE}}</string>
+    <string>dist/main.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO}}/packages/server</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <!-- 크래시 루프 완화 — 즉사 시 최소 10초 간격 재기동 -->
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>{{REPO}}/.dev-logs/daemon-server.log</string>
+  <key>StandardErrorPath</key>
+  <string>{{REPO}}/.dev-logs/daemon-server.log</string>
+</dict>
+</plist>

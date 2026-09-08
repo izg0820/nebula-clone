@@ -62,6 +62,13 @@ else
   fi
 fi
 
+# ── launchd 데몬과 상호배제 — sweep이 데몬을 죽여도 launchd가 즉시 되살려 포트 경합이 됨 ──
+for daemon_service in com.nebula.server com.nebula.agent; do
+  if launchctl print "gui/$(id -u)/$daemon_service" >/dev/null 2>&1; then
+    fail "launchd 데몬($daemon_service)이 실행 중 — scripts/daemon.sh uninstall 후 dev.sh 사용"
+  fi
+done
+
 # ── 이전 스택 정리 — 재실행 시 기존 실행분을 전부 종료하고 새로 시작 ──
 mkdir -p "$logs_dir"
 pid_file="$logs_dir/dev.pid"
