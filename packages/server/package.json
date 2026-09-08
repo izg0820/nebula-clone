@@ -6,6 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "start:dev": "pnpm --filter @nebula/shared build && ts-node src/main.ts",
+    "openapi": "pnpm --filter @nebula/shared build && NEBULA_CLIENT_TOKEN=openapi-export-dummy-not-a-secret-client NEBULA_AGENT_TOKEN=openapi-export-dummy-not-a-secret-agent DB_PATH=':memory:' ts-node src/openapi/export-openapi.ts",
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
     "test:cov": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage"
   },
