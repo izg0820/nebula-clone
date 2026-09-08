@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { decodeViewerFrame } from '@nebula/shared';
-import { ApiClient, ApiError, toErrorMessage } from './api';
+import { ApiError, NebulaClient, toErrorMessage } from '@nebula/client';
 import { interpretGesture, toDevicePoint, ScreenSize } from './coordinates';
 
 interface ScreenViewProps {
-  readonly api: ApiClient;
+  readonly api: NebulaClient;
   readonly serverUrl: string;
   readonly token: string;
   readonly deviceId: string;
@@ -50,8 +50,24 @@ const STREAM_TERMINAL_CLOSE_MESSAGES: Record<number, string> = {
   4400: '스트림 요청 형식 오류 (deviceId/occupantId 누락)',
   4401: '스트림 인증 실패 — 토큰 확인',
   4403: '점유자가 아니어서 화면을 볼 수 없습니다 — 기기를 다시 점유하세요',
+  4408: '점유가 만료됐습니다 — 다시 점유하세요',
   4429: '연결 시도 과다 — 잠시 후 다시 시도하세요',
 };
+
+/** 서버가 점유를 인정하지 않는 종료 — 세션(occupantId)을 들고 있어도 무의미 */
+const STREAM_OCCUPATION_LOST_CODES = new Set([4403, 4408]);
+
+export interface StreamCloseOutcome {
+  readonly message: string;
+  readonly isOccupationLost: boolean;
+}
+
+/** 종료 코드 해석 — null이면 터미널 아님(백오프 재연결 대상) */
+export function streamCloseOutcome(code: number): StreamCloseOutcome | null {
+  const message = STREAM_TERMINAL_CLOSE_MESSAGES[code];
+  if (!message) return null;
+  return { message, isOccupationLost: STREAM_OCCUPATION_LOST_CODES.has(code) };
+}
 const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
 
@@ -206,7 +222,7 @@ export function ScreenView({
   useEffect(() => {
     let isActive = true;
     api
-      .screenshot(deviceId, occupantId)
+      .screenshot({ deviceId, occupantId })
       .then((result) => {
         if (isActive) setScreenPt({ widthPt: result.widthPt, heightPt: result.heightPt });
       })
@@ -269,9 +285,11 @@ export function ScreenView({
         if (!isActive) return;
         // 굳은 마지막 프레임을 실시간 화면으로 오인하지 않게 즉시 연결 중 표시로 전환
         setHasFrame(false);
-        const terminalMessage = STREAM_TERMINAL_CLOSE_MESSAGES[event.code];
-        if (terminalMessage) {
-          onError(terminalMessage);
+        const outcome = streamCloseOutcome(event.code);
+        if (outcome) {
+          onError(outcome.message);
+          // 만료(4408)·비점유자(4403)는 세션이 무효 — 들고 있어봐야 모든 요청이 403
+          if (outcome.isOccupationLost) onOccupationLost();
           return;
         }
         // 서버 재기동·일시 단선은 백오프 재연결 (Agent 터널과 대칭)
@@ -291,7 +309,8 @@ export function ScreenView({
       socket?.close();
       player?.close();
     };
-  }, [serverUrl, token, deviceId, occupantId, onError]);
+    // onOccupationLost는 App이 useCallback으로 안정 identity 보장 — 인라인이면 재연결 폭주
+  }, [serverUrl, token, deviceId, occupantId, onError, onOccupationLost]);
 
   /** 드래그 시작점 (클릭=탭 / 드래그=스와이프 판별용) — pointerId로 캡처한 포인터만 추적 */
   const pointerStartRef = useRef<{ x: number; y: number; time: number; pointerId: number } | null>(
@@ -344,20 +363,23 @@ export function ScreenView({
 
       const gesture = interpretGesture(from, to, Date.now() - start.time, screenPt);
       if (gesture.kind === 'tap') {
-        api.tap(deviceId, occupantId, gesture.x, gesture.y).catch((error: unknown) => {
-          handleActionError('탭 실패', error);
-        });
+        api.tap({ deviceId, occupantId }, { x: gesture.x, y: gesture.y }).catch(
+          (error: unknown) => {
+            handleActionError('탭 실패', error);
+          },
+        );
         return;
       }
       api
         .swipe(
-          deviceId,
-          occupantId,
-          gesture.fromX,
-          gesture.fromY,
-          gesture.toX,
-          gesture.toY,
-          gesture.durationMs,
+          { deviceId, occupantId },
+          {
+            fromX: gesture.fromX,
+            fromY: gesture.fromY,
+            toX: gesture.toX,
+            toY: gesture.toY,
+            durationMs: gesture.durationMs,
+          },
         )
         .catch((error: unknown) => handleActionError('스와이프 실패', error));
     },
@@ -365,7 +387,7 @@ export function ScreenView({
   );
 
   const handleHome = useCallback(() => {
-    api.pressButton(deviceId, occupantId, 'home').catch((error: unknown) => {
+    api.pressButton({ deviceId, occupantId }, 'home').catch((error: unknown) => {
       handleActionError('홈 실패', error);
     });
   }, [api, deviceId, occupantId, handleActionError]);
@@ -375,14 +397,17 @@ export function ScreenView({
     if (!screenPt) return;
     const midY = Math.round(screenPt.heightPt / 2);
     api
-      .swipe(deviceId, occupantId, 1, midY, Math.round(screenPt.widthPt * 0.6), midY, 250)
+      .swipe(
+        { deviceId, occupantId },
+        { fromX: 1, fromY: midY, toX: Math.round(screenPt.widthPt * 0.6), toY: midY, durationMs: 250 },
+      )
       .catch((error: unknown) => handleActionError('뒤로가기 실패', error));
   }, [api, deviceId, occupantId, screenPt, handleActionError]);
 
   const handleType = useCallback(() => {
     if (text.length === 0) return;
     api
-      .typeText(deviceId, occupantId, text)
+      .typeText({ deviceId, occupantId }, text)
       .then(() => setText(''))
       .catch((error: unknown) => handleActionError('입력 실패', error));
   }, [api, deviceId, occupantId, text, handleActionError]);

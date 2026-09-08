@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ApiClient, ApiError, PublicDevice, toErrorMessage } from './api';
+import { ApiError, NebulaClient, PublicDevice, toErrorMessage } from '@nebula/client';
 import { DeviceCard } from './DeviceCard';
 import { ScreenView } from './ScreenView';
 import { SettingsPanel } from './SettingsPanel';
+import { useOccupationKeepalive } from './useOccupationKeepalive';
 
 const DEVICE_POLL_INTERVAL_MS = 5_000;
 const DEFAULT_SERVER_URL = 'http://localhost:3000';
@@ -39,7 +40,7 @@ export function App() {
   const [occupation, setOccupation] = useState<Occupation | null>(loadStoredOccupation);
   const [status, setStatus] = useState('');
 
-  const api = useMemo(() => new ApiClient(serverUrl, token), [serverUrl, token]);
+  const api = useMemo(() => new NebulaClient({ baseUrl: serverUrl, token }), [serverUrl, token]);
 
   useEffect(() => {
     localStorage.setItem('serverUrl', serverUrl);
@@ -81,7 +82,7 @@ export function App() {
   const handleOccupy = useCallback(
     (deviceId: string) => {
       api
-        .occupy(deviceId)
+        .occupy({ deviceId })
         .then((result) => {
           setOccupation({ deviceId: result.device.id, occupantId: result.occupantId });
           setStatus('');
@@ -95,6 +96,9 @@ export function App() {
   // 점유 기기에 스크린샷 명령이 주기적으로 재발행됨 (러너 메인 스레드 점유 → 헬스 오탐)
   const handleOccupationLost = useCallback(() => setOccupation(null), []);
 
+  // 점유 sliding TTL 유지 — 30초마다 keepalive (활동 없으면 서버가 10분 후 회수)
+  useOccupationKeepalive(api, occupation, handleOccupationLost, setStatus);
+
   const handleRelease = useCallback(() => {
     if (!occupation) return;
     api
@@ -104,9 +108,12 @@ export function App() {
         setStatus('');
       })
       .catch((error: unknown) => {
-        // 서버가 점유를 모르는 경우(만료·불일치)만 세션 폐기 — 일시 오류에 occupantId를
-        // 버리면 해제 수단이 사라져 기기가 잠김 (점유 TTL 부재)
-        if (error instanceof ApiError && (error.status === 403 || error.status === 404)) {
+        // 서버가 점유를 모르는 경우만 세션 폐기 — 403(불일치)·404(기기 없음)·
+        // 409(만료 회수 후 미점유). 일시 오류에 occupantId를 버리면 해제 수단이 사라짐
+        if (
+          error instanceof ApiError &&
+          (error.status === 403 || error.status === 404 || error.status === 409)
+        ) {
           setOccupation(null);
           setStatus('점유가 이미 무효라 세션을 정리했습니다');
           return;

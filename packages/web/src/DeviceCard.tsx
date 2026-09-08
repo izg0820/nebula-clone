@@ -1,4 +1,4 @@
-import { PublicDevice } from './api';
+import { PublicDevice } from '@nebula/client';
 
 interface DeviceCardProps {
   readonly device: PublicDevice;

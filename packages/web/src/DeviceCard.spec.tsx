@@ -1,8 +1,9 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test } from 'vitest';
 import { DeviceCard } from './DeviceCard';
-import { PublicDevice } from './api';
+import { PublicDevice } from '@nebula/client';
 
+// 생성 스키마 기준 전체 필드 — 서버 스펙과 어긋나면 여기서 컴파일 실패 (드리프트 검출)
 const DEVICE: PublicDevice = {
   id: 'udid-1',
   name: 'iPhone 14 Pro Max',
@@ -10,6 +11,10 @@ const DEVICE: PublicDevice = {
   osVersion: '26.0',
   tags: ['controller-ready'],
   status: 'online',
+  agentId: 'agent-1',
+  occupiedAt: null,
+  lastHeartbeatAt: '2026-09-08T00:00:00.000Z',
+  lastActivityAt: null,
   isOccupied: false,
 };
 

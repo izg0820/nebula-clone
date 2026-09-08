@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json --noEmit && vite build",
-    "start:dev": "vite",
+    "start:dev": "pnpm --filter @nebula/client build && vite",
     "test": "vitest run"
   },
   "dependencies": {
+    "@nebula/client": "workspace:*",
     "@nebula/shared": "workspace:*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
