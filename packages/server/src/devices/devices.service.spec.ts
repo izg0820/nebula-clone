@@ -176,6 +176,22 @@ describe('DevicesService', () => {
     expect(cutoff).toBeLessThanOrEqual(after - ttlMs);
   });
 
+  test('NEBULA_HEARTBEAT_TIMEOUT_MS 설정 시 하트비트 cutoff가 그 값 기준', () => {
+    const markStaleOffline = jest.fn().mockReturnValue([]);
+    const timeoutMs = 30_000;
+    const service = createService(createRepositoryMock({ markStaleOffline }), {
+      NEBULA_HEARTBEAT_TIMEOUT_MS: String(timeoutMs),
+    });
+    const before = Date.now();
+
+    service.expireStaleDevices();
+
+    const cutoff = new Date(markStaleOffline.mock.calls[0][0] as string).getTime();
+    const after = Date.now();
+    expect(cutoff).toBeGreaterThanOrEqual(before - timeoutMs);
+    expect(cutoff).toBeLessThanOrEqual(after - timeoutMs);
+  });
+
   test('occupationExpiresAt: 활동 시각 + TTL, 미점유면 null', () => {
     const service = createService(createRepositoryMock(), {
       NEBULA_OCCUPATION_TTL_MS: '60000',

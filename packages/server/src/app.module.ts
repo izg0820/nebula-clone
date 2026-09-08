@@ -1,7 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
-import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { AgentsModule } from './agents/agents.module';
 import { CommandsModule } from './commands/commands.module';
@@ -24,7 +23,6 @@ import { StreamsModule } from './streams/streams.module';
         limit: Number(process.env.NEBULA_RATE_LIMIT_PER_MINUTE) || RATE_LIMIT_PER_MINUTE,
       },
     ]),
-    ScheduleModule.forRoot(),
     StorageModule,
     DevicesModule,
     AgentsModule,

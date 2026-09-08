@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
-import { HEARTBEAT_TIMEOUT_MS, OCCUPATION_TTL_MS } from '../config/constants';
+import { HEARTBEAT_TIMEOUT_MS, OCCUPATION_TTL_MS, resolveMsEnv } from '../config/constants';
 import { Device, OccupationFailure, OccupyFilter, RegisterDeviceInput } from './device.types';
 import { DEVICES_REPOSITORY, DevicesRepository } from './devices.repository';
 
@@ -24,11 +24,6 @@ const OCCUPATION_ERRORS: Record<OccupationFailure, () => Error> = {
   forbidden: () => new ForbiddenException('점유자 불일치'),
 };
 
-/** 선택적 env 오버라이드 해석 — 검증은 env.validation이 담당, 여기선 값만 채택 */
-function resolveOccupationTtlMs(raw: string | undefined): number {
-  if (raw === undefined) return OCCUPATION_TTL_MS;
-  return Number(raw);
-}
 
 /**
  * 디바이스 도메인 로직 — Repository 접근은 이 Service로만 일원화
@@ -37,12 +32,20 @@ function resolveOccupationTtlMs(raw: string | undefined): number {
 @Injectable()
 export class DevicesService {
   private readonly occupationTtlMs: number;
+  private readonly heartbeatTimeoutMs: number;
 
   constructor(
     @Inject(DEVICES_REPOSITORY) private readonly repository: DevicesRepository,
     config: ConfigService,
   ) {
-    this.occupationTtlMs = resolveOccupationTtlMs(config.get<string>('NEBULA_OCCUPATION_TTL_MS'));
+    this.occupationTtlMs = resolveMsEnv(
+      config.get<string>('NEBULA_OCCUPATION_TTL_MS'),
+      OCCUPATION_TTL_MS,
+    );
+    this.heartbeatTimeoutMs = resolveMsEnv(
+      config.get<string>('NEBULA_HEARTBEAT_TIMEOUT_MS'),
+      HEARTBEAT_TIMEOUT_MS,
+    );
   }
 
   listAll(): Device[] {
@@ -110,7 +113,7 @@ export class DevicesService {
 
   /** 하트비트 만료 기기 오프라인 처리 — 처리된 기기 ID 반환 */
   expireStaleDevices(): string[] {
-    const cutoffIso = new Date(Date.now() - HEARTBEAT_TIMEOUT_MS).toISOString();
+    const cutoffIso = new Date(Date.now() - this.heartbeatTimeoutMs).toISOString();
     return this.repository.markStaleOffline(cutoffIso);
   }
 }

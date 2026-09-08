@@ -1,3 +1,4 @@
+import { ConfigService } from '@nestjs/config';
 import { VIEWER_CLOSE_OCCUPATION_EXPIRED } from '../config/constants';
 import { DevicesService } from '../devices/devices.service';
 import { StreamsRelayService } from '../streams/streams-relay.service';
@@ -12,7 +13,8 @@ function createMonitor(expireResult: () => string[]): {
   } as unknown as DevicesService;
   const closeViewers = jest.fn();
   const relay = { closeViewers } as unknown as StreamsRelayService;
-  return { monitor: new OccupancyExpiryMonitor(devicesService, relay), closeViewers };
+  const config = { get: () => undefined } as unknown as ConfigService;
+  return { monitor: new OccupancyExpiryMonitor(devicesService, relay, config), closeViewers };
 }
 
 describe('OccupancyExpiryMonitor', () => {

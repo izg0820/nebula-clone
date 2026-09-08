@@ -41,6 +41,8 @@ export interface SupervisorConfig {
   readonly logDir: string;
   /** Controller 토큰 — 설정 시 러너 env(TEST_RUNNER_...)로 주입 + 헬스체크 헤더 첨부 */
   readonly controllerToken?: string | null;
+  /** 러너 헬스 폴링 주기 (ms) — 미지정 시 기본 10초 */
+  readonly healthIntervalMs?: number;
 }
 
 /** 자식 프로세스 최소 인터페이스 (테스트 주입용) */
@@ -298,7 +300,7 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
 
     session.healthTimer = setInterval(
       () => void this.pollHealth(session, generation),
-      HEALTH_INTERVAL_MS,
+      this.config.healthIntervalMs ?? HEALTH_INTERVAL_MS,
     );
   }
 

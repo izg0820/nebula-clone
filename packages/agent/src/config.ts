@@ -31,6 +31,8 @@ export interface SupervisorEnvConfig {
   readonly basePort: number;
   readonly derivedDataDir: string;
   readonly logDir: string;
+  /** 러너 헬스 폴링 주기 (ms) */
+  readonly healthIntervalMs: number;
 }
 
 /** 서버 게이트웨이와 동일한 agentId 허용 형식 */
@@ -38,6 +40,7 @@ const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
 const DEFAULT_DISCOVERY_INTERVAL_MS = 20_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 25_000;
+const DEFAULT_HEALTH_INTERVAL_MS = 10_000;
 /** 주기 하한 — 1ms 같은 값이 devicectl spawn 폭주로 이어지는 것 방지 */
 const MIN_INTERVAL_MS = 1_000;
 const MIN_TOKEN_LENGTH = 24;
@@ -133,6 +136,12 @@ export function parseSupervisorConfig(env: NodeJS.ProcessEnv): SupervisorEnvConf
     basePort,
     derivedDataDir: env.NEBULA_DERIVED_DATA_DIR ?? join(nebulaHome, 'derived-data'),
     logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(nebulaHome, 'logs'),
+    healthIntervalMs: parsePositiveInt(
+      'NEBULA_CONTROLLER_HEALTH_INTERVAL_MS',
+      env.NEBULA_CONTROLLER_HEALTH_INTERVAL_MS,
+      DEFAULT_HEALTH_INTERVAL_MS,
+      MIN_INTERVAL_MS,
+    ),
   };
 }
 

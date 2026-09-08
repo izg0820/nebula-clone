@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { ApiError, NebulaClient } from '@nebula/client';
+import { parseIntervalEnv } from './env';
 
 /** 점유 세션 (App과 동일 형태 — 순환 import 방지용 로컬 선언) */
 export interface KeepaliveOccupation {
@@ -8,13 +9,19 @@ export interface KeepaliveOccupation {
 }
 
 /** 서버 TTL(기본 10분)의 1/20 — 백그라운드 탭 타이머 스로틀(1분)에도 여유 */
-export const OCCUPATION_KEEPALIVE_INTERVAL_MS = 30_000;
+export const OCCUPATION_KEEPALIVE_INTERVAL_MS = parseIntervalEnv(
+  import.meta.env.VITE_KEEPALIVE_INTERVAL_MS,
+  30_000,
+);
 
 /**
  * 사용자 입력이 이 시간 없으면 keepalive 중단 — 방치된 탭이 점유를 영구화하면
  * TTL이 고치려던 버그와 동형. 중단 후엔 서버 TTL(10분)이 자연 회수 → 4408/409로 세션 정리
  */
-export const KEEPALIVE_IDLE_LIMIT_MS = 30 * 60_000;
+export const KEEPALIVE_IDLE_LIMIT_MS = parseIntervalEnv(
+  import.meta.env.VITE_KEEPALIVE_IDLE_LIMIT_MS,
+  30 * 60_000,
+);
 
 /** 사람 활동으로 치는 입력 — 시청만(입력 없음)은 30분 후 회수 대상 (문서화된 트레이드오프) */
 const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel'] as const;

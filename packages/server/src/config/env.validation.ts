@@ -1,4 +1,8 @@
-import { MIN_OCCUPATION_TTL_MS } from './constants';
+import {
+  MIN_HEARTBEAT_TIMEOUT_MS,
+  MIN_OCCUPATION_TTL_MS,
+  MIN_SWEEP_INTERVAL_MS,
+} from './constants';
 
 /** 기동 시 필수 환경 변수 검증 — 누락·약한 토큰이면 즉시 실패 */
 const REQUIRED_TOKEN_KEYS = ['NEBULA_CLIENT_TOKEN', 'NEBULA_AGENT_TOKEN'] as const;
@@ -17,22 +21,22 @@ function tokenProblem(value: unknown): string | null {
   return null;
 }
 
-/** 선택적 점유 TTL 오버라이드 검증 실패 사유 — 미설정이면 기본값 사용이라 통과 */
-function occupationTtlProblem(value: unknown): string | null {
+/** 선택적 양의 정수 env 검증 실패 사유 — 미설정이면 기본값 사용이라 통과 */
+function optionalIntProblem(value: unknown, minimum: number): string | null {
   if (value === undefined) return null;
   const parsed = Number(value);
-  if (!Number.isInteger(parsed)) return '정수 ms 값이어야 함';
-  if (parsed < MIN_OCCUPATION_TTL_MS) return `${MIN_OCCUPATION_TTL_MS}ms 미만 불가`;
+  if (!Number.isInteger(parsed)) return '정수 값이어야 함';
+  if (parsed < minimum) return `${minimum} 미만 불가`;
   return null;
 }
 
-/** 선택적 rate limit 오버라이드 — 미설정이면 기본값(RATE_LIMIT_PER_MINUTE) */
-function rateLimitProblem(value: unknown): string | null {
-  if (value === undefined) return null;
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) return '1 이상 정수여야 함';
-  return null;
-}
+/** 선택적 주기·상한 env 키와 하한 — 새 주기 env는 여기에 등록 */
+const OPTIONAL_INT_KEYS: ReadonlyArray<readonly [string, number]> = [
+  ['NEBULA_OCCUPATION_TTL_MS', MIN_OCCUPATION_TTL_MS],
+  ['NEBULA_RATE_LIMIT_PER_MINUTE', 1],
+  ['NEBULA_SWEEP_INTERVAL_MS', MIN_SWEEP_INTERVAL_MS],
+  ['NEBULA_HEARTBEAT_TIMEOUT_MS', MIN_HEARTBEAT_TIMEOUT_MS],
+];
 
 export function validateEnv(config: Record<string, unknown>): Record<string, unknown> {
   const problems = REQUIRED_TOKEN_KEYS.map((key) => {
@@ -40,11 +44,10 @@ export function validateEnv(config: Record<string, unknown>): Record<string, unk
     return problem ? `${key}: ${problem}` : null;
   }).filter((problem): problem is string => problem !== null);
 
-  const ttlProblem = occupationTtlProblem(config.NEBULA_OCCUPATION_TTL_MS);
-  if (ttlProblem) problems.push(`NEBULA_OCCUPATION_TTL_MS: ${ttlProblem}`);
-
-  const limitProblem = rateLimitProblem(config.NEBULA_RATE_LIMIT_PER_MINUTE);
-  if (limitProblem) problems.push(`NEBULA_RATE_LIMIT_PER_MINUTE: ${limitProblem}`);
+  for (const [key, minimum] of OPTIONAL_INT_KEYS) {
+    const problem = optionalIntProblem(config[key], minimum);
+    if (problem) problems.push(`${key}: ${problem}`);
+  }
 
   // 두 토큰이 같으면 클라이언트(읽기) 토큰으로 Agent 터널 접속이 가능해짐 — 권한 분리 붕괴
   if (

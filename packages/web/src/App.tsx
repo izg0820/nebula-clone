@@ -3,9 +3,13 @@ import { ApiError, NebulaClient, PublicDevice, toErrorMessage } from '@nebula/cl
 import { DeviceCard } from './DeviceCard';
 import { ScreenView } from './ScreenView';
 import { SettingsPanel } from './SettingsPanel';
+import { parseIntervalEnv } from './env';
 import { useOccupationKeepalive } from './useOccupationKeepalive';
 
-const DEVICE_POLL_INTERVAL_MS = 5_000;
+const DEVICE_POLL_INTERVAL_MS = parseIntervalEnv(
+  import.meta.env.VITE_DEVICE_POLL_INTERVAL_MS,
+  5_000,
+);
 const DEFAULT_SERVER_URL = 'http://localhost:3000';
 const MIN_TOKEN_LENGTH = 24;
 

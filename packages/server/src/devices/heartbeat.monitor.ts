@@ -1,15 +1,35 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import {
+  Injectable,
+  Logger,
+  OnApplicationBootstrap,
+  OnApplicationShutdown,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { resolveMsEnv, SWEEP_INTERVAL_MS } from '../config/constants';
 import { DevicesService } from './devices.service';
 
-/** 하트비트 만료 기기 오프라인 처리 (30초 주기) */
+/** 하트비트 만료 기기 오프라인 처리 — 주기는 NEBULA_SWEEP_INTERVAL_MS (기본 30초) */
 @Injectable()
-export class HeartbeatMonitor {
+export class HeartbeatMonitor implements OnApplicationBootstrap, OnApplicationShutdown {
   private readonly logger = new Logger(HeartbeatMonitor.name);
+  private readonly intervalMs: number;
+  private timer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly devicesService: DevicesService) {}
+  constructor(
+    private readonly devicesService: DevicesService,
+    config: ConfigService,
+  ) {
+    this.intervalMs = resolveMsEnv(config.get<string>('NEBULA_SWEEP_INTERVAL_MS'), SWEEP_INTERVAL_MS);
+  }
 
-  @Cron(CronExpression.EVERY_30_SECONDS)
+  onApplicationBootstrap(): void {
+    this.timer = setInterval(() => this.sweep(), this.intervalMs);
+  }
+
+  onApplicationShutdown(): void {
+    if (this.timer) clearInterval(this.timer);
+  }
+
   sweep(): void {
     try {
       const staleIds = this.devicesService.expireStaleDevices();

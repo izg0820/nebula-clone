@@ -1,7 +1,22 @@
 /** 서버 전역 상수 */
 
-/** 하트비트 미수신 시 오프라인 판정 기준 (ms) */
+/** 하트비트 미수신 시 오프라인 판정 기준 (ms) — env NEBULA_HEARTBEAT_TIMEOUT_MS로 조정 */
 export const HEARTBEAT_TIMEOUT_MS = 90_000;
+
+/** NEBULA_HEARTBEAT_TIMEOUT_MS 하한 — Agent 하트비트 주기(기본 25초)보다 짧으면 오탐 */
+export const MIN_HEARTBEAT_TIMEOUT_MS = 10_000;
+
+/** 스윕(하트비트 만료·점유 만료) 주기 (ms) — env NEBULA_SWEEP_INTERVAL_MS로 조정 */
+export const SWEEP_INTERVAL_MS = 30_000;
+
+/** NEBULA_SWEEP_INTERVAL_MS 하한 */
+export const MIN_SWEEP_INTERVAL_MS = 1_000;
+
+/** 선택적 ms env 해석 — 검증은 env.validation이 담당, 여기선 값만 채택 */
+export function resolveMsEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined) return fallback;
+  return Number(raw);
+}
 
 /** 점유 유휴 만료 기준 (ms) — occupy·명령·keepalive가 갱신, 초과 시 스윕이 회수 (sliding TTL) */
 export const OCCUPATION_TTL_MS = 600_000;
