@@ -43,6 +43,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       supervisor: null,
       mirrorHelperPath: null,
       controllerToken: null,
+      android: null,
     };
   }
 

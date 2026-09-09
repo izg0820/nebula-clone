@@ -6,6 +6,7 @@ import { join } from 'path';
 import { promisify } from 'util';
 import { logger } from './logger';
 import { RegisterDeviceInput } from '@nebula/shared';
+import { DiscoverySource } from './discovery-source';
 
 const execFileAsync = promisify(execFile);
 
@@ -78,6 +79,15 @@ export function mergeWithStatic(
   const staticIds = new Set(staticDevices.map((device) => device.id));
   const uniqueDiscovered = discovered.filter((device) => !staticIds.has(device.id));
   return [...uniqueDiscovered, ...staticDevices];
+}
+
+/** DiscoverySource 어댑터 — 기존 discoverDevices를 다중 소스 집계에 편입 */
+export class IosDiscoverySource implements DiscoverySource {
+  readonly platform = 'ios' as const;
+
+  discover(): Promise<RegisterDeviceInput[] | null> {
+    return discoverDevices();
+  }
 }
 
 /**

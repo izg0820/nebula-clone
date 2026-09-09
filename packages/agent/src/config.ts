@@ -1,7 +1,7 @@
 import { accessSync, constants } from 'fs';
 import { homedir, hostname } from 'os';
 import { join } from 'path';
-import { RegisterDeviceInput } from '@nebula/shared';
+import { DevicePlatform, isDevicePlatform, RegisterDeviceInput } from '@nebula/shared';
 
 /** Agent 설정 */
 export interface AgentConfig {
@@ -22,6 +22,18 @@ export interface AgentConfig {
   readonly mirrorHelperPath: string | null;
   /** Controller HTTP 토큰 — 러너(TEST_RUNNER_...)와 클라이언트 헤더에 함께 배선 */
   readonly controllerToken: string | null;
+  /** Android(adb) 설정 — null이면 Android 전 기능 비활성 */
+  readonly android: AndroidEnvConfig | null;
+}
+
+/** Android 환경 설정 (NEBULA_ADB_ENABLED=true일 때만 로드) */
+export interface AndroidEnvConfig {
+  readonly adbPath: string;
+  /** 러너 APK 경로 — 미지정 시 발견만 되고 제어 비활성 (mirror-helper와 동일 패턴) */
+  readonly runnerApkPath: string | null;
+  /** 맥 로컬 포워딩 포트 시작값 (iOS 8200과 분리) */
+  readonly basePort: number;
+  readonly logDir: string;
 }
 
 /** 수퍼바이저 환경 설정 */
@@ -89,11 +101,18 @@ export function parseStaticDevices(raw: string | undefined): readonly RegisterDe
     return {
       id: record.id,
       name: record.name,
-      platform: 'ios',
+      platform: parseStaticPlatform(record.platform),
       osVersion: record.osVersion,
       tags: parseTags(record.tags),
     };
   });
+}
+
+/** 정적 기기 platform — 미지정은 'ios' 기본, 알 수 없는 값은 즉시 실패 */
+function parseStaticPlatform(raw: unknown): DevicePlatform {
+  if (raw === undefined) return 'ios';
+  if (isDevicePlatform(raw)) return raw;
+  throw new Error(`NEBULA_STATIC_DEVICES platform 값 오류: ${String(raw)} (ios|android)`);
 }
 
 /** tags 엄격 검증 — 비문자열이 섞이면 서버가 register 전체를 폐기하므로 기동 시점에 실패시킴 */
@@ -216,7 +235,51 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
     supervisor: parseSupervisorConfig(env),
     mirrorHelperPath: parseMirrorHelperPath(env.NEBULA_MIRROR_HELPER),
     controllerToken: parseControllerToken(env.NEBULA_CONTROLLER_TOKEN),
+    android: parseAndroidConfig(env),
   };
+}
+
+const DEFAULT_ANDROID_BASE_PORT = 8300;
+
+/** NEBULA_ADB_ENABLED=true일 때 Android 설정 로드 — 경로들은 기동 시점에 존재 검증 */
+export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | null {
+  if (env.NEBULA_ADB_ENABLED !== 'true') return null;
+
+  const adbPath = env.NEBULA_ADB_PATH ?? '/opt/homebrew/bin/adb';
+  try {
+    accessSync(adbPath, constants.X_OK);
+  } catch {
+    throw new Error(
+      `adb 경로가 없거나 실행 권한 없음: ${adbPath} — brew install --cask android-platform-tools (또는 NEBULA_ADB_PATH 지정)`,
+    );
+  }
+
+  const basePort = parsePositiveInt(
+    'NEBULA_ANDROID_BASE_PORT',
+    env.NEBULA_ANDROID_BASE_PORT,
+    DEFAULT_ANDROID_BASE_PORT,
+  );
+  if (basePort > MAX_BASE_PORT) {
+    throw new Error(`NEBULA_ANDROID_BASE_PORT는 ${MAX_BASE_PORT} 이하여야 함`);
+  }
+
+  return {
+    adbPath,
+    runnerApkPath: parseAndroidRunnerApk(env.NEBULA_ANDROID_RUNNER_APK),
+    basePort,
+    logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(homedir(), '.nebula', 'logs'),
+  };
+}
+
+/** 지정 시 존재 확인 — 경로 오타가 무한 install 재시도로만 드러나지 않게 */
+function parseAndroidRunnerApk(raw: string | undefined): string | null {
+  if (!raw || raw.trim().length === 0) return null;
+  try {
+    accessSync(raw, constants.R_OK);
+  } catch {
+    throw new Error(`NEBULA_ANDROID_RUNNER_APK 경로 없음: ${raw} — scripts/build-android.sh로 빌드`);
+  }
+  return raw;
 }
 
 /** Controller 토큰 — 빈 값은 미설정 취급, 설정 시 서버 토큰과 같은 최소 길이 강제 */
