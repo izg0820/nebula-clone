@@ -1,0 +1,2 @@
+# Android SDK 위치 — local.properties로 복사 후 본인 경로로 (gitignore 대상)
+sdk.dir=/opt/homebrew/share/android-commandlinetools

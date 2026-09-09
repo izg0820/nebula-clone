@@ -13,3 +13,6 @@ controller-ios/local.yml
 controller-ios/Host/Info.plist
 mirror-helper/.build/
 .dev-logs/
+android-controller/local.properties
+android-controller/.gradle/
+android-controller/**/build/

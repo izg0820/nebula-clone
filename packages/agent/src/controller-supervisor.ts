@@ -1,13 +1,13 @@
-import { spawn } from 'child_process';
-import { closeSync, mkdirSync, openSync, statSync } from 'fs';
+import { mkdirSync } from 'fs';
 import { join } from 'path';
+import { makeControllerHealthCheck } from './controller-health';
 import { ControllerEndpointResolver } from './controller-registry';
 import { logger } from './logger';
+import { ChildLike, signalProcessTree, spawnLogged, TrackedProcess } from './process-tree';
 
 /** 헬스 폴링 주기·판정 */
 const HEALTH_INTERVAL_MS = 10_000;
 const HEALTH_FAIL_THRESHOLD = 3;
-const HEALTH_TIMEOUT_MS = 5_000;
 
 /** 재기동 백오프 */
 const RESTART_BASE_MS = 2_000;
@@ -24,9 +24,6 @@ const PORT_COOLDOWN_MS = 5_000;
  * 키체인 프롬프트 등으로 행하면 "영원히 not-ready·로그 없음"으로 남는 것 방지
  */
 const READY_DEADLINE_MS = 10 * 60_000;
-
-/** xcodebuild 로그 파일 상한 — 재기동 루프에서 디스크 압박 방지 (초과 시 truncate) */
-const LOG_MAX_BYTES = 10 * 1024 * 1024;
 
 /** 수퍼바이저 설정 */
 export interface SupervisorConfig {
@@ -45,24 +42,13 @@ export interface SupervisorConfig {
   readonly healthIntervalMs?: number;
 }
 
-/** 자식 프로세스 최소 인터페이스 (테스트 주입용) */
-export interface ChildLike {
-  readonly pid?: number;
-  on(event: 'exit', listener: (code: number | null) => void): void;
-  on(event: 'error', listener: (error: Error) => void): void;
-  kill(signal?: NodeJS.Signals): boolean;
-}
+// 공용 프로세스 유틸은 process-tree.ts로 이동 — 기존 소비자를 위해 re-export 유지
+export { ChildLike };
 
 /** 외부 의존 주입 지점 — 테스트에서 가짜로 대체 */
 export interface SupervisorDeps {
   readonly spawnProcess: (command: string, args: readonly string[], logPath: string) => ChildLike;
   readonly checkHealth: (baseUrl: string) => Promise<boolean>;
-}
-
-/** 종료 추적 가능한 자식 프로세스 래퍼 */
-interface TrackedProcess {
-  readonly child: ChildLike;
-  hasExited: boolean;
 }
 
 /** 기기별 Controller 세션 상태 */
@@ -83,83 +69,16 @@ interface Session {
   launchedAtMs: number;
 }
 
-/** 로그 파일 fd 확보 — 상한 초과 시 truncate(회전), 실패(디렉터리 없음·EMFILE 등) 시 로그 없이 진행 */
-function openLogFd(logPath: string): number | null {
-  try {
-    const flags = shouldTruncateLog(logPath) ? 'w' : 'a';
-    return openSync(logPath, flags);
-  } catch (error) {
-    logger.warn({ err: error, logPath }, '로그 파일 열기 실패 — 진단 로그 없이 spawn');
-    return null;
-  }
-}
-
-function shouldTruncateLog(logPath: string): boolean {
-  try {
-    return statSync(logPath).size > LOG_MAX_BYTES;
-  } catch {
-    return false;
-  }
-}
-
-function toStdio(fd: number | null): ('ignore' | number)[] {
-  if (fd === null) return ['ignore', 'ignore', 'ignore'];
-  return ['ignore', fd, fd];
-}
-
 /** TEST_RUNNER_ 접두사 env는 xcodebuild가 러너 프로세스 환경으로 전달함 — 토큰 배선 */
 function toRunnerEnv(controllerToken: string | null): NodeJS.ProcessEnv {
   if (!controllerToken) return process.env;
   return { ...process.env, TEST_RUNNER_NEBULA_CONTROLLER_TOKEN: controllerToken };
 }
 
-function toTokenHeaders(controllerToken: string | null): Record<string, string> {
-  if (!controllerToken) return {};
-  return { 'x-nebula-token': controllerToken };
-}
-
 /** stdout·stderr를 로그 파일에 append — 서명 만료·빌드 실패 진단 근거 확보 */
 function makeDefaultSpawn(controllerToken: string | null): SupervisorDeps['spawnProcess'] {
   const env = toRunnerEnv(controllerToken);
-  return (command, args, logPath) => {
-    const fd = openLogFd(logPath);
-    // detached: 프로세스 그룹 리더로 만들어 그룹 단위 종료 가능하게
-    const child = spawn(command, [...args], { stdio: toStdio(fd), detached: true, env });
-    // spawn이 fd를 자식에 dup하므로 부모 사본은 즉시 닫음 — 재기동 루프에서 fd 누수 방지
-    if (fd !== null) closeSync(fd);
-    return child;
-  };
-}
-
-function makeDefaultCheckHealth(controllerToken: string | null): SupervisorDeps['checkHealth'] {
-  const headers = toTokenHeaders(controllerToken);
-  return async (baseUrl) => {
-    try {
-      const response = await fetch(`${baseUrl}/health`, {
-        method: 'POST',
-        headers,
-        signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-      });
-      return response.ok;
-    } catch {
-      return false;
-    }
-  };
-}
-
-/** 프로세스 그룹에 시그널 전송 — pid 없거나 그룹 전송 실패 시 단일 프로세스로 폴백 */
-function signalProcessTree(tracked: TrackedProcess, signal: NodeJS.Signals): void {
-  if (tracked.hasExited) return;
-  const { child } = tracked;
-  if (child.pid === undefined) {
-    child.kill(signal);
-    return;
-  }
-  try {
-    process.kill(-child.pid, signal);
-  } catch {
-    child.kill(signal);
-  }
+  return (command, args, logPath) => spawnLogged(command, args, logPath, env);
 }
 
 /**
@@ -185,7 +104,7 @@ export class ControllerSupervisor implements ControllerEndpointResolver {
     const controllerToken = config.controllerToken ?? null;
     this.deps = {
       spawnProcess: deps.spawnProcess ?? makeDefaultSpawn(controllerToken),
-      checkHealth: deps.checkHealth ?? makeDefaultCheckHealth(controllerToken),
+      checkHealth: deps.checkHealth ?? makeControllerHealthCheck(controllerToken),
     };
   }
 

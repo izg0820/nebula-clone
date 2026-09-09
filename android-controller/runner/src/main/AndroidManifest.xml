@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- self-instrumenting 단일 APK — Activity/Service 없음.
+     INTERNET은 루프백 소켓에도 필요 (소켓 생성이 inet gid로 게이트됨), normal 권한이라 자동 부여 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <instrumentation
+        android:name=".ControllerInstrumentation"
+        android:targetPackage="com.nebula.controller"
+        android:label="Nebula Controller" />
+    <application
+        android:label="Nebula Controller"
+        android:allowBackup="false" />
+</manifest>

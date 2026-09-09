@@ -1,10 +1,15 @@
 import { RegisterDeviceInput } from '@nebula/shared';
+import { AdbClient } from './adb-client';
+import { AndroidDiscoverySource } from './android-discovery';
+import { AndroidSupervisor } from './android-supervisor';
 import { CommandExecutor } from './command-executor';
+import { CompositeResolver } from './composite-resolver';
 import { loadConfig } from './config';
 import { ControllerEndpointResolver, StaticControllerRegistry } from './controller-registry';
 import { ControllerSupervisor } from './controller-supervisor';
-import { discoverDevices, mergeWithStatic } from './device-discovery';
-import { DiscoveryState } from './discovery-state';
+import { IosDiscoverySource } from './device-discovery';
+import { DiscoveryAggregator } from './discovery-aggregator';
+import { DiscoverySource } from './discovery-source';
 import { logger } from './logger';
 import { ServerTunnel } from './server-tunnel';
 import { StreamManager } from './stream-manager';
@@ -28,7 +33,7 @@ function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupe
 function createStreamManager(
   helperPath: string | null,
   tunnel: ServerTunnel,
-  discoveryState: DiscoveryState,
+  discovery: DiscoveryAggregator,
 ): StreamManager | null {
   if (!helperPath) {
     logger.warn('NEBULA_MIRROR_HELPER 미설정 — 미러링 비활성');
@@ -38,7 +43,34 @@ function createStreamManager(
     helperPath,
     // 발견 결과의 기기 이름 — mirror-helper의 캡처 장치 매칭(--name)에 사용
     resolveDeviceName: (deviceId) =>
-      discoveryState.current.find((device) => device.id === deviceId)?.name ?? null,
+      discovery.devices.find((device) => device.id === deviceId)?.name ?? null,
+  });
+}
+
+/** 발견 소스 구성 — iOS는 항상, Android는 NEBULA_ADB_ENABLED=true일 때만 */
+function createDiscoverySources(config: ReturnType<typeof loadConfig>): DiscoverySource[] {
+  const sources: DiscoverySource[] = [new IosDiscoverySource()];
+  if (config.android) {
+    sources.push(new AndroidDiscoverySource(new AdbClient(config.android.adbPath)));
+  }
+  return sources;
+}
+
+/** Android 러너 수퍼바이저 — 러너 APK 미지정 시 발견만 (제어 비활성) */
+function createAndroidSupervisor(
+  config: ReturnType<typeof loadConfig>,
+): AndroidSupervisor | null {
+  if (!config.android) return null;
+  if (!config.android.runnerApkPath) {
+    logger.warn('NEBULA_ANDROID_RUNNER_APK 미설정 — Android 발견만, 제어 비활성');
+    return null;
+  }
+  return new AndroidSupervisor({
+    adbPath: config.android.adbPath,
+    runnerApkPath: config.android.runnerApkPath,
+    basePort: config.android.basePort,
+    logDir: config.android.logDir,
+    controllerToken: config.controllerToken,
   });
 }
 
@@ -59,13 +91,15 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
   logger.info({ agentId: config.agentId, serverUrl: config.serverUrl }, 'Agent 시작');
 
-  const discoveryState = new DiscoveryState();
+  const discovery = new DiscoveryAggregator(createDiscoverySources(config), config.staticDevices);
   const supervisor = createSupervisor(config);
-  const resolver: ControllerEndpointResolver =
-    supervisor ?? new StaticControllerRegistry(config.controllerPorts);
+  const androidSupervisor = createAndroidSupervisor(config);
+  const resolver: ControllerEndpointResolver = new CompositeResolver([
+    ...(supervisor ? [supervisor] : []),
+    ...(androidSupervisor ? [androidSupervisor] : []),
+    new StaticControllerRegistry(config.controllerPorts),
+  ]);
   const executor = new CommandExecutor(resolver, config.controllerToken);
-  // 정적 기기는 실기기가 아니므로 수퍼바이저(xcodebuild) 대상에서 제외
-  const staticDeviceIds = new Set(config.staticDevices.map((device) => device.id));
   let isDiscoveryInFlight = false;
 
   const tunnel = new ServerTunnel(config, {
@@ -75,7 +109,7 @@ async function main(): Promise<void> {
     },
     onCommand: (command) => executor.execute(command),
   });
-  const streamManager = createStreamManager(config.mirrorHelperPath, tunnel, discoveryState);
+  const streamManager = createStreamManager(config.mirrorHelperPath, tunnel, discovery);
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {
@@ -85,24 +119,23 @@ async function main(): Promise<void> {
     }
     isDiscoveryInFlight = true;
     try {
-      const result = mergeWithStatic(await discoverDevices(), config.staticDevices);
-      const shouldRegister = discoveryState.apply(result);
+      const shouldRegister = await discovery.refresh();
 
-      // 등록 여부와 무관하게 세션 동기화 — 연속 실패 임계로 목록이 비워진 경우에도 세션 정리
-      const realDeviceIds = discoveryState.current
-        .map((device) => device.id)
-        .filter((id) => !staticDeviceIds.has(id));
-      supervisor?.syncDevices(realDeviceIds);
-      // 미러링 상시 구동 — 시청자 없어도 캡처 유지
-      streamManager?.syncAlwaysOn(realDeviceIds);
+      // 등록 여부와 무관하게 세션 동기화 — 연속 실패 임계로 목록이 비워진 경우에도 세션 정리.
+      // 수퍼바이저·미러링은 iOS 전용 (Android 세션은 3·4단계의 AndroidSupervisor가 담당)
+      const iosDeviceIds = discovery.discoveredIds('ios');
+      supervisor?.syncDevices(iosDeviceIds);
+      androidSupervisor?.syncDevices(discovery.discoveredIds('android'));
+      // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (iOS — Android 미러링은 4단계)
+      streamManager?.syncAlwaysOn(iosDeviceIds);
       if (!shouldRegister) return;
 
-      const sent = tunnel.sendRegister(withReadinessTag(discoveryState.current, resolver));
+      const sent = tunnel.sendRegister(withReadinessTag(discovery.devices, resolver));
       if (!sent) {
         logger.warn('터널 미연결로 등록 유실 — 재연결 시 onOpen에서 재등록됨');
         return;
       }
-      logger.info({ count: discoveryState.current.length }, '기기 등록 전송');
+      logger.info({ count: discovery.devices.length }, '기기 등록 전송');
     } finally {
       isDiscoveryInFlight = false;
     }
@@ -112,7 +145,7 @@ async function main(): Promise<void> {
 
   const discoveryTimer = setInterval(() => void discoverAndRegister(), config.discoveryIntervalMs);
   const heartbeatTimer = setInterval(() => {
-    const deviceIds = discoveryState.current.map((device) => device.id);
+    const deviceIds = discovery.devices.map((device) => device.id);
     if (deviceIds.length === 0) return;
     tunnel.sendHeartbeat(deviceIds);
   }, config.heartbeatIntervalMs);
@@ -130,12 +163,14 @@ async function main(): Promise<void> {
     clearInterval(heartbeatTimer);
     streamManager?.stopAll();
     supervisor?.stopAll();
+    androidSupervisor?.stopAll();
     tunnel.close();
     // 즉시 exit 금지 — 자식(xcodebuild·iproxy·mirror-helper)이 고아로 남음.
     // 헬퍼도 반드시 대기: SIGTERM 미응답 시 SIGKILL 에스컬레이션이 unref 타이머라 exit하면 소멸됨
     void (async (): Promise<void> => {
       await Promise.all([
         supervisor?.awaitTermination(SHUTDOWN_GRACE_MS),
+        androidSupervisor?.awaitTermination(SHUTDOWN_GRACE_MS),
         streamManager?.awaitTermination(SHUTDOWN_GRACE_MS),
       ]);
       process.exit(0);
