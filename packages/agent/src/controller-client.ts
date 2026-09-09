@@ -31,6 +31,18 @@ function toControllerRequest(action: DeviceAction): ControllerRequest {
 }
 
 /**
+ * 러너 HTTP 계약(widthPt/heightPt — iOS는 pt, Android 러너는 px 값)을 서버 계약
+ * (coordWidth/coordHeight = 탭 좌표 기준계)으로 정규화. 러너 양쪽을 무변경으로 유지하는 경계
+ */
+export function normalizeScreenshotResult(result: unknown): unknown {
+  if (typeof result !== 'object' || result === null) return result;
+  const record = result as Record<string, unknown>;
+  if (typeof record.widthPt !== 'number' || typeof record.heightPt !== 'number') return result;
+  const { widthPt, heightPt, ...rest } = record;
+  return { ...rest, coordWidth: widthPt, coordHeight: heightPt };
+}
+
+/**
  * 기기별 Controller(XCUITest 러너) HTTP 클라이언트
  * Controller는 상시 구동(pre-warm) 전제 — 세션 개념 없음
  */
@@ -56,6 +68,9 @@ export class ControllerClient {
         return { ok: false, error: `controller HTTP ${response.status}` };
       }
       const result: unknown = await response.json();
+      if (action.kind === 'screenshot') {
+        return { ok: true, result: normalizeScreenshotResult(result) };
+      }
       return { ok: true, result };
     } catch (error) {
       logger.warn({ err: error, baseUrl: this.baseUrl }, 'Controller 호출 실패');

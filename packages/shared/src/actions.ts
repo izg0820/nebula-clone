@@ -24,15 +24,25 @@ export interface UiDumpAction {
   readonly kind: 'uiDump';
 }
 
-/** 화면 캡처 — 결과: { jpegBase64, widthPt, heightPt } (pt 크기는 클릭 좌표 환산용) */
+/** 화면 캡처 — 서버 계약 결과: { jpegBase64, coordWidth, coordHeight } (탭 좌표 기준계 크기) */
 export interface ScreenshotAction {
   readonly kind: 'screenshot';
 }
 
-/** 하드웨어 버튼 — home: 홈 화면 이동 (iOS의 '뒤로'는 버튼이 아니라 엣지 스와이프) */
+/** 하드웨어 버튼 종류 — back은 Android 전용 (iOS 러너는 home만 지원, back은 400) */
+export type HardwareButton = 'home' | 'back';
+
+const HARDWARE_BUTTONS: readonly HardwareButton[] = ['home', 'back'];
+
+/** 신뢰 경계 검증용 타입 가드 */
+export function isHardwareButton(value: unknown): value is HardwareButton {
+  return HARDWARE_BUTTONS.includes(value as HardwareButton);
+}
+
+/** 하드웨어 버튼 — home: 홈 화면 이동, back: Android 뒤로 (iOS의 '뒤로'는 엣지 스와이프) */
 export interface PressButtonAction {
   readonly kind: 'pressButton';
-  readonly button: 'home';
+  readonly button: HardwareButton;
 }
 
 export type DeviceAction =

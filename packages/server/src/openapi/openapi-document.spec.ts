@@ -88,7 +88,7 @@ describe('OpenAPI document', () => {
   test('screenshot·ui-dump 응답의 중첩 result 스키마가 실제 필드를 선언', () => {
     const screenshot = schemas().ScreenshotResultDto;
     expect(Object.keys(screenshot.properties ?? {})).toEqual(
-      expect.arrayContaining(['ok', 'jpegBase64', 'widthPt', 'heightPt']),
+      expect.arrayContaining(['ok', 'jpegBase64', 'coordWidth', 'coordHeight']),
     );
     const uiDump = schemas().UiDumpResultDto;
     expect(Object.keys(uiDump.properties ?? {})).toEqual(expect.arrayContaining(['ok', 'tree']));

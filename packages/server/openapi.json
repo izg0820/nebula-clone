@@ -1230,7 +1230,8 @@
           "platform": {
             "type": "string",
             "enum": [
-              "ios"
+              "ios",
+              "android"
             ]
           },
           "osVersion": {
@@ -1297,7 +1298,8 @@
           "platform": {
             "type": "string",
             "enum": [
-              "ios"
+              "ios",
+              "android"
             ],
             "description": "플랫폼 필터"
           },
@@ -1520,9 +1522,10 @@
           "button": {
             "type": "string",
             "enum": [
-              "home"
+              "home",
+              "back"
             ],
-            "description": "하드웨어 버튼 (현재 home만)"
+            "description": "하드웨어 버튼 — back은 Android 전용"
           }
         },
         "required": [
@@ -1540,20 +1543,20 @@
             "type": "string",
             "description": "JPEG 이미지 (base64)"
           },
-          "widthPt": {
+          "coordWidth": {
             "type": "number",
-            "description": "화면 폭 (pt) — 탭 좌표 환산 기준"
+            "description": "탭 좌표 기준계 폭 — iOS는 pt, Android는 px (Agent가 정규화)"
           },
-          "heightPt": {
+          "coordHeight": {
             "type": "number",
-            "description": "화면 높이 (pt)"
+            "description": "탭 좌표 기준계 높이"
           }
         },
         "required": [
           "ok",
           "jpegBase64",
-          "widthPt",
-          "heightPt"
+          "coordWidth",
+          "coordHeight"
         ]
       },
       "ScreenshotCommandResponseDto": {

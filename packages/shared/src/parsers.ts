@@ -1,5 +1,5 @@
-import { CommandOutcome, DeviceAction } from './actions';
-import { RegisterDeviceInput } from './device';
+import { CommandOutcome, DeviceAction, isHardwareButton } from './actions';
+import { isDevicePlatform, RegisterDeviceInput } from './device';
 import { AgentMessage, ServerMessage } from './messages';
 
 /** 신뢰 경계의 수신 JSON 검증 파서 — 형식 불일치는 null (throw 금지) */
@@ -30,7 +30,7 @@ function isRegisterDevice(value: unknown): value is RegisterDeviceInput {
   return (
     isDeviceId(record.id) &&
     typeof record.name === 'string' &&
-    record.platform === 'ios' &&
+    isDevicePlatform(record.platform) &&
     typeof record.osVersion === 'string' &&
     Array.isArray(record.tags) &&
     record.tags.every((tag: unknown) => typeof tag === 'string')
@@ -64,7 +64,7 @@ function isDeviceAction(value: unknown): value is DeviceAction {
   }
   if (record.kind === 'typeText') return typeof record.text === 'string';
   if (record.kind === 'screenshot') return true;
-  if (record.kind === 'pressButton') return record.button === 'home';
+  if (record.kind === 'pressButton') return isHardwareButton(record.button);
   return record.kind === 'uiDump';
 }
 

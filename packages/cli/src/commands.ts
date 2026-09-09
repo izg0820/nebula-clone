@@ -1,4 +1,4 @@
-import { DeviceTarget, NebulaClient, PublicDevice } from '@nebula/client';
+import { DevicePlatform, DeviceTarget, NebulaClient, PublicDevice } from '@nebula/client';
 import { CliFlags } from './args';
 import { EXIT_OK, UsageError } from './exit-codes';
 import { SessionStore } from './session-store';
@@ -134,7 +134,7 @@ function toMutableTags(tags: readonly string[] | undefined): string[] | undefine
 async function runOccupy(context: CommandContext): Promise<number> {
   const result = await context.client.occupy({
     deviceId: context.flags.deviceId,
-    platform: context.flags.platform as 'ios' | undefined,
+    platform: context.flags.platform as DevicePlatform | undefined,
     tags: toMutableTags(context.flags.tags),
   });
   context.session.save({
@@ -224,7 +224,9 @@ async function runType(context: CommandContext): Promise<number> {
 async function runPress(context: CommandContext): Promise<number> {
   const target = resolveTarget(context);
   const button = requireFlag(context.flags.button, 'button');
-  if (button !== 'home') throw new UsageError(`--button은 home만 지원: ${button}`);
+  if (button !== 'home' && button !== 'back') {
+    throw new UsageError(`--button은 home|back 지원: ${button} (back은 Android 전용)`);
+  }
   await context.client.pressButton(target, button);
   emit(context, ['ok'], { ok: true });
   return EXIT_OK;
@@ -250,8 +252,8 @@ async function runScreenshot(context: CommandContext): Promise<number> {
     context.saveFile(context.flags.out, bytes);
     emit(
       context,
-      [`저장됨: ${context.flags.out} (${result.widthPt}x${result.heightPt} pt)`],
-      { saved: context.flags.out, widthPt: result.widthPt, heightPt: result.heightPt },
+      [`저장됨: ${context.flags.out} (${result.coordWidth}x${result.coordHeight})`],
+      { saved: context.flags.out, coordWidth: result.coordWidth, coordHeight: result.coordHeight },
     );
     return EXIT_OK;
   }

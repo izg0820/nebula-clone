@@ -229,7 +229,7 @@ export interface components {
             /** @description 기기 이름 */
             name: string;
             /** @enum {string} */
-            platform: "ios";
+            platform: "ios" | "android";
             osVersion: string;
             /** @description 기기 태그 (controller-ready 등) */
             tags: string[];
@@ -257,7 +257,7 @@ export interface components {
              * @description 플랫폼 필터
              * @enum {string}
              */
-            platform?: "ios";
+            platform?: "ios" | "android";
             /** @description 기기 태그 필터 (모두 일치) */
             tags?: string[];
             /** @description 특정 기기 지정 점유 (UDID) */
@@ -332,19 +332,19 @@ export interface components {
             /** @description 점유 시 발급된 점유자 ID */
             occupantId: string;
             /**
-             * @description 하드웨어 버튼 (현재 home만)
+             * @description 하드웨어 버튼 — back은 Android 전용
              * @enum {string}
              */
-            button: "home";
+            button: "home" | "back";
         };
         ScreenshotResultDto: {
             ok: boolean;
             /** @description JPEG 이미지 (base64) */
             jpegBase64: string;
-            /** @description 화면 폭 (pt) — 탭 좌표 환산 기준 */
-            widthPt: number;
-            /** @description 화면 높이 (pt) */
-            heightPt: number;
+            /** @description 탭 좌표 기준계 폭 — iOS는 pt, Android는 px (Agent가 정규화) */
+            coordWidth: number;
+            /** @description 탭 좌표 기준계 높이 */
+            coordHeight: number;
         };
         ScreenshotCommandResponseDto: {
             result: components["schemas"]["ScreenshotResultDto"];

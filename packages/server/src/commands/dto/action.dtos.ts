@@ -1,3 +1,4 @@
+import { HardwareButton } from '@nebula/shared';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsIn,
@@ -82,7 +83,7 @@ export class TypeTextDto extends CommandBaseDto {
 export class UiDumpDto extends CommandBaseDto {}
 
 export class PressButtonDto extends CommandBaseDto {
-  @ApiProperty({ enum: ['home'], description: '하드웨어 버튼 (현재 home만)' })
-  @IsIn(['home'])
-  button!: 'home';
+  @ApiProperty({ enum: ['home', 'back'], description: '하드웨어 버튼 — back은 Android 전용' })
+  @IsIn(['home', 'back'])
+  button!: HardwareButton;
 }

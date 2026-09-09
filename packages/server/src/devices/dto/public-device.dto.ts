@@ -12,7 +12,7 @@ export class PublicDeviceDto implements PublicDevice {
   @ApiProperty({ description: '기기 이름' })
   readonly name!: string;
 
-  @ApiProperty({ enum: ['ios'] })
+  @ApiProperty({ enum: ['ios', 'android'] })
   readonly platform!: DevicePlatform;
 
   @ApiProperty()

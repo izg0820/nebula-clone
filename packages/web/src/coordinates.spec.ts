@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { clampToScreen, interpretGesture, toDevicePoint } from './coordinates';
 
 describe('toDevicePoint', () => {
-  const SCREEN = { widthPt: 430, heightPt: 932 };
+  const SCREEN = { width: 430, height: 932 };
 
   test('렌더 크기와 기기 pt 크기 비율로 환산', () => {
     // 절반 크기로 렌더된 이미지의 중앙 클릭 → 기기 화면 중앙
@@ -16,7 +16,7 @@ describe('toDevicePoint', () => {
 });
 
 describe('clampToScreen', () => {
-  const SCREEN = { widthPt: 430, heightPt: 932 };
+  const SCREEN = { width: 430, height: 932 };
 
   test('화면 밖 좌표(캡처 릴리즈)를 경계로 클램프', () => {
     expect(clampToScreen({ x: -50, y: 1000 }, SCREEN)).toEqual({ x: 0, y: 932 });
@@ -25,7 +25,7 @@ describe('clampToScreen', () => {
 });
 
 describe('interpretGesture', () => {
-  const SCREEN = { widthPt: 430, heightPt: 932 };
+  const SCREEN = { width: 430, height: 932 };
 
   test('임계 거리 미만은 탭 (시작점 기준)', () => {
     expect(interpretGesture({ x: 100, y: 100 }, { x: 105, y: 103 }, 80, SCREEN)).toEqual({

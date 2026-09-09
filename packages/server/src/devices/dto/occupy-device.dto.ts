@@ -4,9 +4,9 @@ import { DevicePlatform } from '../device.types';
 
 /** 기기 점유 요청 */
 export class OccupyDeviceDto {
-  @ApiPropertyOptional({ enum: ['ios'], description: '플랫폼 필터' })
+  @ApiPropertyOptional({ enum: ['ios', 'android'], description: '플랫폼 필터' })
   @IsOptional()
-  @IsIn(['ios'])
+  @IsIn(['ios', 'android'])
   platform?: DevicePlatform;
 
   @ApiPropertyOptional({ type: [String], description: '기기 태그 필터 (모두 일치)' })

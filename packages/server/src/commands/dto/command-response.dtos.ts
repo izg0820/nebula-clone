@@ -36,11 +36,11 @@ export class ScreenshotResultDto {
   @ApiProperty({ description: 'JPEG 이미지 (base64)' })
   readonly jpegBase64!: string;
 
-  @ApiProperty({ description: '화면 폭 (pt) — 탭 좌표 환산 기준' })
-  readonly widthPt!: number;
+  @ApiProperty({ description: '탭 좌표 기준계 폭 — iOS는 pt, Android는 px (Agent가 정규화)' })
+  readonly coordWidth!: number;
 
-  @ApiProperty({ description: '화면 높이 (pt)' })
-  readonly heightPt!: number;
+  @ApiProperty({ description: '탭 좌표 기준계 높이' })
+  readonly coordHeight!: number;
 }
 
 export class ScreenshotCommandResponseDto {

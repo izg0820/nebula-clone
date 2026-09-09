@@ -224,7 +224,7 @@ export function ScreenView({
     api
       .screenshot({ deviceId, occupantId })
       .then((result) => {
-        if (isActive) setScreenPt({ widthPt: result.widthPt, heightPt: result.heightPt });
+        if (isActive) setScreenPt({ width: result.coordWidth, height: result.coordHeight });
       })
       .catch((error: unknown) => {
         if (isActive) handleActionError('화면 크기 확인 실패', error);
@@ -395,11 +395,11 @@ export function ScreenView({
   /** iOS '뒤로' = 왼쪽 엣지 스와이프 */
   const handleBack = useCallback(() => {
     if (!screenPt) return;
-    const midY = Math.round(screenPt.heightPt / 2);
+    const midY = Math.round(screenPt.height / 2);
     api
       .swipe(
         { deviceId, occupantId },
-        { fromX: 1, fromY: midY, toX: Math.round(screenPt.widthPt * 0.6), toY: midY, durationMs: 250 },
+        { fromX: 1, fromY: midY, toX: Math.round(screenPt.width * 0.6), toY: midY, durationMs: 250 },
       )
       .catch((error: unknown) => handleActionError('뒤로가기 실패', error));
   }, [api, deviceId, occupantId, screenPt, handleActionError]);

@@ -17,6 +17,35 @@ describe('parseAgentMessage', () => {
     });
   });
 
+  test('android platform 통과, 알 수 없는 platform은 register 폐기', () => {
+    const androidRaw = JSON.stringify({
+      type: 'register',
+      devices: [{ id: 'R3CX90', name: 'SM F966N', platform: 'android', osVersion: '17', tags: [] }],
+    });
+    expect(parseAgentMessage(androidRaw)).toMatchObject({ type: 'register' });
+
+    const unknownRaw = JSON.stringify({
+      type: 'register',
+      devices: [{ id: 'x1', name: 'n', platform: 'windows', osVersion: '11', tags: [] }],
+    });
+    expect(parseAgentMessage(unknownRaw)).toBeNull();
+  });
+
+  test('pressButton back 통과, 알 수 없는 버튼은 command 폐기', () => {
+    const command = (button: string) =>
+      JSON.stringify({
+        type: 'command',
+        requestId: 'req-1',
+        deviceId: 'u1',
+        action: { kind: 'pressButton', button },
+      });
+
+    expect(parseServerMessage(command('back'))).toMatchObject({
+      action: { kind: 'pressButton', button: 'back' },
+    });
+    expect(parseServerMessage(command('power'))).toBeNull();
+  });
+
   test('register capabilities — 유효 광고는 보존, 손상은 null, 미광고는 undefined', () => {
     const base = {
       type: 'register',

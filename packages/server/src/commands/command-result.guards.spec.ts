@@ -17,7 +17,7 @@ describe('command-result.guards', () => {
   });
 
   test('toScreenshotResult: 정상 형태는 그대로 좁힘', () => {
-    const result = { ok: true, jpegBase64: 'abc=', widthPt: 430, heightPt: 932 };
+    const result = { ok: true, jpegBase64: 'abc=', coordWidth: 430, coordHeight: 932 };
     expect(toScreenshotResult(result)).toEqual(result);
   });
 
@@ -26,7 +26,7 @@ describe('command-result.guards', () => {
       BadGatewayException,
     );
     expect(() =>
-      toScreenshotResult({ ok: true, jpegBase64: 'abc=', widthPt: '430', heightPt: 932 }),
+      toScreenshotResult({ ok: true, jpegBase64: 'abc=', coordWidth: '430', coordHeight: 932 }),
     ).toThrow(BadGatewayException);
     expect(() => toScreenshotResult(undefined)).toThrow(BadGatewayException);
   });

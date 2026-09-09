@@ -22,15 +22,15 @@ export function toScreenshotResult(result: unknown): ScreenshotResultDto {
     isRecord(result) &&
     typeof result.ok === 'boolean' &&
     typeof result.jpegBase64 === 'string' &&
-    typeof result.widthPt === 'number' &&
-    typeof result.heightPt === 'number'
+    typeof result.coordWidth === 'number' &&
+    typeof result.coordHeight === 'number'
   ) {
     return {
       ok: result.ok,
       jpegBase64: result.jpegBase64,
-      widthPt: result.widthPt,
-      heightPt: result.heightPt,
+      coordWidth: result.coordWidth,
+      coordHeight: result.coordHeight,
     };
   }
-  throw new BadGatewayException('기기 스크린샷 응답 형식 오류 (jpegBase64/pt 크기 누락)');
+  throw new BadGatewayException('기기 스크린샷 응답 형식 오류 (jpegBase64/coord 크기 누락)');
 }
