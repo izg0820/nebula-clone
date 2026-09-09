@@ -34,10 +34,11 @@ agent_env_default() {
 }
 
 if [ "$mode" = "--fake" ]; then
-  blue "가짜 기기 모드 — 수퍼바이저·미러링 비활성"
+  blue "가짜 기기 모드 — 수퍼바이저·미러링·Android 비활성"
   export NEBULA_STATIC_DEVICES='[{"id":"fake-1","name":"Fake iPhone","osVersion":"26.0","tags":["fake"]}]'
   export NEBULA_XCODEBUILD_ENABLED=''
   export NEBULA_MIRROR_HELPER=''
+  export NEBULA_ADB_ENABLED=''
 else
   # 수퍼바이저(기본 on) 도구 사전 검사 — 없으면 기동 후 재기동 루프만 돌고 원인이 로그에 묻힘.
   # .env에 NEBULA_XCODEBUILD_ENABLED=false를 명시한 수동 러너 모드는 검사 생략
@@ -49,6 +50,20 @@ else
 
   agent_env_default NEBULA_XCODEBUILD_ENABLED true
   agent_env_default NEBULA_CONTROLLER_PROJECT "$repo_root/controller-ios/NebulaController.xcodeproj"
+
+  # Android — .env에 NEBULA_ADB_ENABLED=true를 명시했을 때만 검사·기본값 주입
+  if grep -q '^NEBULA_ADB_ENABLED=true' "$repo_root/packages/agent/.env"; then
+    command -v adb >/dev/null || fail "adb 필요 — brew install --cask android-platform-tools"
+    android_runner_apk="$repo_root/android-controller/runner/build/outputs/apk/debug/runner-debug.apk"
+    if [ ! -f "$android_runner_apk" ]; then
+      blue "Android 러너 APK 빌드 중..."
+      bash "$repo_root/scripts/build-android.sh" >/dev/null 2>&1 \
+        || blue "Android 러너 빌드 실패 — Android는 발견만 동작 (scripts/build-android.sh로 확인)"
+    fi
+    if [ -f "$android_runner_apk" ]; then
+      agent_env_default NEBULA_ANDROID_RUNNER_APK "$android_runner_apk"
+    fi
+  fi
 
   # mirror-helper — 없으면 빌드 시도, 실패해도 미러링만 빠진 채 진행
   helper_bin="$repo_root/mirror-helper/.build/debug/mirror-helper"
