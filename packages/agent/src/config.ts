@@ -38,6 +38,51 @@ export interface AndroidEnvConfig {
   readonly mirrorDexPath: string | null;
   /** 미러링 포워딩 포트 시작값 (러너 basePort와 분리 — 기본 8400) */
   readonly mirrorBasePort: number;
+  /** 러너 수퍼바이저 타이밍 (전부 env 조정 가능) */
+  readonly supervisorTuning: AndroidSupervisorTuning;
+  /** 러너(device) 액션 타이밍 — am instrument -e로 기기에 전달 */
+  readonly runnerTuning: AndroidRunnerTuning;
+  /** 미러링 스트림(agent)·데몬(device) 타이밍 — 데몬 쪽은 app_process 인자로 전달 */
+  readonly mirrorTuning: AndroidMirrorTuning;
+}
+
+/** Android 러너 수퍼바이저 타이밍 (agent 쪽) */
+export interface AndroidSupervisorTuning {
+  readonly healthIntervalMs: number;
+  readonly healthFailThreshold: number;
+  readonly restartBaseMs: number;
+  readonly restartMaxMs: number;
+  readonly killEscalationMs: number;
+  readonly portCooldownMs: number;
+  readonly readyDeadlineMs: number;
+  readonly reinstallAfterFailures: number;
+}
+
+/** Android 러너(device) 액션 타이밍 — am instrument -e 인자로 전달 */
+export interface AndroidRunnerTuning {
+  readonly actionTimeoutMs: number;
+  readonly swipeStepMs: number;
+  readonly maxSwipeDurationMs: number;
+}
+
+/** Android 미러링 타이밍 — agent 스트림 관리 + device 인코더 데몬 */
+export interface AndroidMirrorTuning {
+  // agent 쪽 스트림 관리
+  readonly restartBaseMs: number;
+  readonly restartMaxMs: number;
+  readonly errorThreshold: number;
+  readonly killEscalationMs: number;
+  readonly preambleDeadlineMs: number;
+  readonly connectRetryMs: number;
+  // device 쪽 인코더 데몬 (app_process 인자로 전달)
+  readonly bitRate: number;
+  readonly fps: number;
+  readonly iframeIntervalSec: number;
+  /** 정지 화면 재발행 주기 (ms) — KEY_REPEAT_PREVIOUS_FRAME_AFTER */
+  readonly repeatFrameMs: number;
+  /** 접힘/펼침 SWAP 감지 폴링 주기 (ms) */
+  readonly swapPollMs: number;
+  readonly acceptDeadlineMs: number;
 }
 
 /** 수퍼바이저 환경 설정 */
@@ -284,7 +329,61 @@ export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | n
     logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(homedir(), '.nebula', 'logs'),
     mirrorDexPath: parseAndroidArtifact('NEBULA_ANDROID_MIRROR_DEX', env.NEBULA_ANDROID_MIRROR_DEX),
     mirrorBasePort,
+    supervisorTuning: parseAndroidSupervisorTuning(env),
+    runnerTuning: parseAndroidRunnerTuning(env),
+    mirrorTuning: parseAndroidMirrorTuning(env),
   };
+}
+
+/** env 이름·기본값·최소값 스펙 → 정수 필드 묶음 파싱 (반복 parsePositiveInt 제거) */
+function parseIntFields<T>(
+  env: NodeJS.ProcessEnv,
+  spec: { [K in keyof T]: readonly [name: string, fallback: number, minimum?: number] },
+): T {
+  const out: Record<string, number> = {};
+  for (const key of Object.keys(spec) as (keyof T)[]) {
+    const [name, fallback, minimum] = spec[key];
+    out[key as string] = parsePositiveInt(name, env[name], fallback, minimum ?? 1);
+  }
+  return out as T;
+}
+
+function parseAndroidSupervisorTuning(env: NodeJS.ProcessEnv): AndroidSupervisorTuning {
+  return parseIntFields<AndroidSupervisorTuning>(env, {
+    healthIntervalMs: ['NEBULA_ANDROID_HEALTH_INTERVAL_MS', 10_000, MIN_INTERVAL_MS],
+    healthFailThreshold: ['NEBULA_ANDROID_HEALTH_FAIL_THRESHOLD', 3],
+    restartBaseMs: ['NEBULA_ANDROID_RESTART_BASE_MS', 2_000],
+    restartMaxMs: ['NEBULA_ANDROID_RESTART_MAX_MS', 60_000],
+    killEscalationMs: ['NEBULA_ANDROID_KILL_ESCALATION_MS', 3_000],
+    portCooldownMs: ['NEBULA_ANDROID_PORT_COOLDOWN_MS', 5_000],
+    readyDeadlineMs: ['NEBULA_ANDROID_READY_DEADLINE_MS', 60_000],
+    reinstallAfterFailures: ['NEBULA_ANDROID_REINSTALL_AFTER_FAILURES', 3],
+  });
+}
+
+function parseAndroidRunnerTuning(env: NodeJS.ProcessEnv): AndroidRunnerTuning {
+  return parseIntFields<AndroidRunnerTuning>(env, {
+    actionTimeoutMs: ['NEBULA_ANDROID_ACTION_TIMEOUT_MS', 9_000],
+    swipeStepMs: ['NEBULA_ANDROID_SWIPE_STEP_MS', 8],
+    maxSwipeDurationMs: ['NEBULA_ANDROID_MAX_SWIPE_DURATION_MS', 8_000],
+  });
+}
+
+function parseAndroidMirrorTuning(env: NodeJS.ProcessEnv): AndroidMirrorTuning {
+  return parseIntFields<AndroidMirrorTuning>(env, {
+    restartBaseMs: ['NEBULA_ANDROID_MIRROR_RESTART_BASE_MS', 2_000],
+    restartMaxMs: ['NEBULA_ANDROID_MIRROR_RESTART_MAX_MS', 60_000],
+    errorThreshold: ['NEBULA_ANDROID_MIRROR_ERROR_THRESHOLD', 5],
+    killEscalationMs: ['NEBULA_ANDROID_MIRROR_KILL_ESCALATION_MS', 2_000],
+    preambleDeadlineMs: ['NEBULA_ANDROID_MIRROR_PREAMBLE_DEADLINE_MS', 10_000],
+    connectRetryMs: ['NEBULA_ANDROID_MIRROR_CONNECT_RETRY_MS', 500],
+    bitRate: ['NEBULA_ANDROID_MIRROR_BITRATE', 8_000_000],
+    fps: ['NEBULA_ANDROID_MIRROR_FPS', 60],
+    iframeIntervalSec: ['NEBULA_ANDROID_MIRROR_IFRAME_SEC', 1],
+    repeatFrameMs: ['NEBULA_ANDROID_MIRROR_REPEAT_FRAME_MS', 100],
+    swapPollMs: ['NEBULA_ANDROID_MIRROR_SWAP_POLL_MS', 500],
+    acceptDeadlineMs: ['NEBULA_ANDROID_MIRROR_ACCEPT_DEADLINE_MS', 30_000],
+  });
 }
 
 /** 지정 시 존재 확인 — 경로 오타가 무한 재시도 루프로만 드러나지 않게 */

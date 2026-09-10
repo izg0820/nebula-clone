@@ -19,8 +19,9 @@ data class EncodedScreenshot(val jpegBase64: String, val width: Int, val height:
 class ActionHandler(
     private val automation: UiAutomation,
     private val context: Context,
+    swipeStepMs: Long = InputSynthesizer.DEFAULT_STEP_MS,
 ) {
-    private val synthesizer = InputSynthesizer(automation)
+    private val synthesizer = InputSynthesizer(automation, swipeStepMs)
     private val mapper = UiNodeMapper()
 
     /** press 버튼 → 접근성 글로벌 액션 (KEYCODE_HOME은 PhoneWindowManager 정책에 취약해 미사용) */

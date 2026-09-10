@@ -15,22 +15,19 @@ sealed class SessionEnd {
 }
 
 private const val MIME_H264 = "video/avc"
-private const val BIT_RATE = 8_000_000
-private const val FRAME_RATE = 60
-/** 키프레임 간격 1초 — 릴레이가 키프레임을 캐시하지 않는 정책(iOS 헬퍼와 동일) 전제 */
-private const val I_FRAME_INTERVAL_SEC = 1
-/**
- * 정지 화면에서도 주기 재발행 — 없으면 인코더 출력이 끊겨 늦게 합류한 시청자가
- * 다음 화면 변화까지 영원히 검은 화면 (Android 고유 함정)
- */
-private const val REPEAT_PREVIOUS_FRAME_US = 100_000L
 private const val DEQUEUE_TIMEOUT_US = 100_000L
+private const val US_PER_MS = 1_000L
 
 /**
  * 인코딩 세션 1개 = 해상도 1개 — MediaCodec(H.264) 입력 Surface에 hidden 가상 디스플레이를 물림.
- * 해상도가 바뀌면(접힘/회전) 세션을 통째로 재구성한다 (새 SPS/PPS 자동 확보)
+ * 해상도가 바뀌면(접힘/회전) 세션을 통째로 재구성한다 (새 SPS/PPS 자동 확보).
+ * 인코더 파라미터(비트레이트·fps·키프레임 간격·정지 화면 재발행)는 전부 Agent env에서 주입
  */
-class EncoderSession(private val display: DisplayState, private val displayId: Int) {
+class EncoderSession(
+    private val display: DisplayState,
+    private val displayId: Int,
+    private val tuning: EncoderTuning,
+) {
     private val codec = MediaCodec.createEncoderByType(MIME_H264)
     private var virtualDisplay: VirtualDisplay? = null
     /** CODEC_CONFIG(SPS/PPS) 보관 — 모든 키프레임 앞에 인밴드 재삽입 (자립 키프레임) */
@@ -42,10 +39,11 @@ class EncoderSession(private val display: DisplayState, private val displayId: I
             MediaFormat.KEY_COLOR_FORMAT,
             MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface,
         )
-        format.setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
-        format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE)
-        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL_SEC)
-        format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_PREVIOUS_FRAME_US)
+        format.setInteger(MediaFormat.KEY_BIT_RATE, tuning.bitRate)
+        format.setInteger(MediaFormat.KEY_FRAME_RATE, tuning.fps)
+        format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, tuning.iframeIntervalSec)
+        // 정지 화면 재발행 — 없으면 늦게 합류한 시청자가 다음 화면 변화까지 검은 화면 (Android 함정)
+        format.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, tuning.repeatFrameMs * US_PER_MS)
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
 
         val surface = codec.createInputSurface()

@@ -3,8 +3,6 @@ package com.nebula.mirror
 import java.io.IOException
 import kotlin.system.exitProcess
 
-/** 접속 데드라인 — Agent가 forward 직후 접속하므로 여유 있게 */
-private const val ACCEPT_DEADLINE_MS = 30_000L
 private const val STATS_INTERVAL_FRAMES = 100
 
 /**
@@ -41,19 +39,19 @@ private fun runProbe(displayId: Int) {
 }
 
 private fun runDaemon(args: Args): Nothing {
-    val watchdog = Watchdog(ACCEPT_DEADLINE_MS)
+    val watchdog = Watchdog(args.acceptDeadlineMs)
     watchdog.arm("클라이언트 접속 대기")
     val sink = MirrorSink(args.socketName)
     System.err.println("[nebula-mirror] 소켓 대기: ${args.socketName}")
     sink.accept()
     watchdog.satisfy()
 
-    var display = Hidden.displayState(args.displayId)
+    val display = Hidden.displayState(args.displayId)
     System.err.println("[nebula-mirror] 세션 시작: ${display.width}x${display.height} rotation=${display.rotation}")
     sink.writePreamble(display)
 
     try {
-        streamForever(sink, args.displayId, display)
+        streamForever(sink, args, display)
     } catch (error: IOException) {
         // 클라이언트(Agent) 단선 — 정상 종료, Agent가 필요 시 재기동
         System.err.println("[nebula-mirror] 클라이언트 단선 — 종료 (${error.message})")
@@ -66,14 +64,15 @@ private fun runDaemon(args: Args): Nothing {
     }
 }
 
-private fun streamForever(sink: MirrorSink, displayId: Int, initial: DisplayState): Nothing {
+private fun streamForever(sink: MirrorSink, args: Args, initial: DisplayState): Nothing {
     var display = initial
     val stats = FrameStats()
     while (true) {
-        val session = EncoderSession(display, displayId)
+        val session = EncoderSession(display, args.displayId, args.tuning)
         session.start()
         try {
-            val end = session.drainUntilChange(DisplayProbe(displayId)) { frame ->
+            val probe = DisplayProbe(args.displayId, args.tuning.swapPollMs)
+            val end = session.drainUntilChange(probe) { frame ->
                 sink.writeFrame(display, frame)
                 stats.count(frame)
             }

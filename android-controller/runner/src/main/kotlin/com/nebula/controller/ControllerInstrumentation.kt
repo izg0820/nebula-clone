@@ -30,6 +30,7 @@ class ControllerInstrumentation : Instrumentation() {
         val port = arguments.getString(ARG_PORT)?.toIntOrNull() ?: DEFAULT_PORT
         // 빈 문자열 토큰은 미설정 취급 — "비워서 끄기"가 전면 401 락아웃이 되지 않게 (iOS 동일)
         val token = arguments.getString(ARG_TOKEN)?.trim()?.takeIf { it.isNotEmpty() }
+        val tuning = RunnerTuning.from(arguments)
 
         val automation = uiAutomation
         if (automation == null) {
@@ -39,8 +40,8 @@ class ControllerInstrumentation : Instrumentation() {
         }
 
         val queue = ActionQueue()
-        val actions = ActionHandler(automation, context)
-        val router = Router(token = token, actions = actions, queue = queue)
+        val actions = ActionHandler(automation, context, tuning.swipeStepMs)
+        val router = Router(token = token, actions = actions, queue = queue, tuning = tuning)
         val server = HttpServer(port = port, route = router::route, onFatal = ::fatal)
 
         server.start()

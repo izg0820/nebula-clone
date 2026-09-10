@@ -72,6 +72,7 @@ function createStreamManager(
           mirrorDexPath,
           mirrorPort: allocateMirrorPort(deviceId),
           logDir: android.logDir,
+          tuning: android.mirrorTuning,
         },
         sendFrame,
       );
@@ -106,6 +107,8 @@ function createAndroidSupervisor(
     basePort: config.android.basePort,
     logDir: config.android.logDir,
     controllerToken: config.controllerToken,
+    tuning: config.android.supervisorTuning,
+    runnerTuning: config.android.runnerTuning,
   });
 }
 

@@ -1,28 +1,14 @@
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { AdbClient } from './adb-client';
+import { AndroidRunnerTuning, AndroidSupervisorTuning } from './config';
 import { makeControllerHealthCheck } from './controller-health';
 import { ControllerEndpointResolver } from './controller-registry';
 import { logger } from './logger';
 import { ChildLike, signalProcessTree, spawnLogged, TrackedProcess } from './process-tree';
 
-/** 헬스 폴링 판정 — iOS 수퍼바이저와 동일 정책 */
-const HEALTH_INTERVAL_MS = 10_000;
-const HEALTH_FAIL_THRESHOLD = 3;
-
-const RESTART_BASE_MS = 2_000;
-const RESTART_MAX_MS = 60_000;
-const KILL_ESCALATION_MS = 3_000;
-const PORT_COOLDOWN_MS = 5_000;
-
-/** install+instrument뿐이라 iOS(xcodebuild 10분)와 달리 짧게 */
-const READY_DEADLINE_MS = 60_000;
-
 /** 기기측 러너 포트 고정 — 기기마다 adb 네임스페이스가 분리되므로 맥 쪽 포트만 다르게 */
 const DEVICE_RUNNER_PORT = 8300;
-
-/** 러너 재기동 연속 실패 시 APK 재설치를 강제하는 임계 */
-const REINSTALL_AFTER_FAILURES = 3;
 
 const RUNNER_COMPONENT = 'com.nebula.controller/.ControllerInstrumentation';
 const RUNNER_PACKAGE = 'com.nebula.controller';
@@ -34,8 +20,23 @@ export interface AndroidSupervisorConfig {
   readonly basePort: number;
   readonly logDir: string;
   readonly controllerToken: string | null;
-  readonly healthIntervalMs?: number;
+  /** 수퍼바이저 타이밍 (env 조정) — 미지정 시 기본값 */
+  readonly tuning?: AndroidSupervisorTuning;
+  /** 러너(device) 액션 타이밍 — instrument -e로 전달 */
+  readonly runnerTuning?: AndroidRunnerTuning;
 }
+
+/** tuning 미지정 시 기본값 (테스트 호출부 호환) */
+const DEFAULT_SUPERVISOR_TUNING: AndroidSupervisorTuning = {
+  healthIntervalMs: 10_000,
+  healthFailThreshold: 3,
+  restartBaseMs: 2_000,
+  restartMaxMs: 60_000,
+  killEscalationMs: 3_000,
+  portCooldownMs: 5_000,
+  readyDeadlineMs: 60_000,
+  reinstallAfterFailures: 3,
+};
 
 /** 외부 의존 주입 지점 — 테스트에서 가짜로 대체 */
 export interface AndroidSupervisorDeps {
@@ -73,11 +74,13 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
   private readonly freePorts: number[] = [];
   private terminating: TrackedProcess[] = [];
   private readonly deps: AndroidSupervisorDeps;
+  private readonly tuning: AndroidSupervisorTuning;
 
   constructor(
     private readonly config: AndroidSupervisorConfig,
     deps: Partial<AndroidSupervisorDeps> = {},
   ) {
+    this.tuning = config.tuning ?? DEFAULT_SUPERVISOR_TUNING;
     const adb = new AdbClient(config.adbPath);
     this.deps = {
       runAdb: deps.runAdb ?? ((args, timeoutMs) => adb.run(args, timeoutMs)),
@@ -174,7 +177,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
       .catch(() => logger.warn({ serial }, 'stayon 설정 실패 — 화면 꺼짐 시 주입이 막힐 수 있음'));
 
     // 연속 실패 시 재설치 강제 — 깨진 설치 상태 탈출구
-    const needsInstall = !session.isInstalled || session.restartAttempt >= REINSTALL_AFTER_FAILURES;
+    const needsInstall = !session.isInstalled || session.restartAttempt >= this.tuning.reinstallAfterFailures;
     if (needsInstall) {
       await this.deps.runAdb(['-s', serial, 'install', '-r', '-t', '-g', this.config.runnerApkPath], 60_000);
       session.isInstalled = true;
@@ -196,6 +199,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
       '--no-hidden-api-checks',
       '-e', 'nebulaPort', String(DEVICE_RUNNER_PORT),
       ...this.tokenArgs(),
+      ...this.runnerTuningArgs(),
       RUNNER_COMPONENT,
     ];
     const child = this.deps.spawnProcess(this.config.adbPath, args, logPath);
@@ -222,10 +226,21 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     return ['-e', 'nebulaToken', token];
   }
 
+  /** 러너(device) 액션 타이밍을 -e 인자로 전달 — 미지정 시 러너 기본값 사용 */
+  private runnerTuningArgs(): readonly string[] {
+    const tuning = this.config.runnerTuning;
+    if (!tuning) return [];
+    return [
+      '-e', 'nebulaActionTimeoutMs', String(tuning.actionTimeoutMs),
+      '-e', 'nebulaSwipeStepMs', String(tuning.swipeStepMs),
+      '-e', 'nebulaMaxSwipeMs', String(tuning.maxSwipeDurationMs),
+    ];
+  }
+
   private startHealthPolling(session: Session, generation: number): void {
     session.healthTimer = setInterval(
       () => void this.pollHealth(session, generation),
-      this.config.healthIntervalMs ?? HEALTH_INTERVAL_MS,
+      this.tuning.healthIntervalMs,
     );
   }
 
@@ -242,7 +257,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     }
 
     // 준비 전 데드라인 — unauthorized·APK 손상 등으로 영원히 not-ready인 wedge 차단
-    if (!session.isReady && Date.now() - session.launchedAtMs > READY_DEADLINE_MS) {
+    if (!session.isReady && Date.now() - session.launchedAtMs > this.tuning.readyDeadlineMs) {
       logger.error({ serial: session.serial }, 'Android 러너 준비 데드라인 초과 — 강제 재기동');
       this.scheduleRestart(session);
       return;
@@ -250,7 +265,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     if (!session.isReady) return;
 
     session.healthFailCount += 1;
-    if (session.healthFailCount < HEALTH_FAIL_THRESHOLD) return;
+    if (session.healthFailCount < this.tuning.healthFailThreshold) return;
     logger.warn({ serial: session.serial }, 'Android 러너 헬스 연속 실패 — 재기동');
     this.scheduleRestart(session);
   }
@@ -262,7 +277,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     session.isReady = false;
     session.healthFailCount = 0;
 
-    const delay = Math.min(RESTART_BASE_MS * 2 ** session.restartAttempt, RESTART_MAX_MS);
+    const delay = Math.min(this.tuning.restartBaseMs * 2 ** session.restartAttempt, this.tuning.restartMaxMs);
     session.restartAttempt += 1;
     logger.info({ serial: session.serial, delay, attempt: session.restartAttempt }, '재기동 예약');
     session.restartTimer = setTimeout(() => {
@@ -288,7 +303,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
       .catch(() => undefined);
 
     // 포트 반납은 쿨다운 후 — 잔존 forward와의 경합 방지 (iOS와 동일 정책)
-    const cooldown = setTimeout(() => this.freePorts.push(session.httpPort), PORT_COOLDOWN_MS);
+    const cooldown = setTimeout(() => this.freePorts.push(session.httpPort), this.tuning.portCooldownMs);
     cooldown.unref();
     logger.info({ serial }, 'Android 러너 세션 정리');
   }
@@ -307,7 +322,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     const escalation = setTimeout(() => {
       if (tracked.hasExited) return;
       signalProcessTree(tracked, 'SIGKILL');
-    }, KILL_ESCALATION_MS);
+    }, this.tuning.killEscalationMs);
     escalation.unref();
   }
 

@@ -3,24 +3,31 @@ import { join } from 'path';
 import { mkdirSync } from 'fs';
 import { AgentFrame, FRAME_FORMAT_H264 } from '@nebula/shared';
 import { AdbClient } from './adb-client';
+import { AndroidMirrorTuning } from './config';
 import { logger } from './logger';
 import { MirrorPacketParser } from './mirror-packet-parser';
 import { ChildLike, signalProcessTree, spawnLogged, TrackedProcess } from './process-tree';
-
-/** 재기동 백오프 — iOS H264Stream과 동일 정책 */
-const RESTART_BASE_MS = 2_000;
-const RESTART_MAX_MS = 60_000;
-const RESTART_ERROR_THRESHOLD = 5;
-const KILL_ESCALATION_MS = 2_000;
-/** 기동 후 프리앰블 데드라인 — 미수신 시 재기동 (iOS RESOLUTION_DEADLINE 대응) */
-const PREAMBLE_DEADLINE_MS = 10_000;
-/** 데몬 listen 전 접속 거부 대비 재시도 간격 */
-const CONNECT_RETRY_MS = 500;
 
 /** 기기측 고정 계약 — MirrorDaemon.kt와 일치 */
 const DEVICE_DEX_PATH = '/data/local/tmp/nebula-mirror.jar';
 const SOCKET_NAME = 'nebula-mirror';
 const DAEMON_ENTRY = 'com.nebula.mirror.MirrorDaemonKt';
+
+/** tuning 미지정 시 기본값 (테스트 호출부 호환) */
+const DEFAULT_MIRROR_TUNING: AndroidMirrorTuning = {
+  restartBaseMs: 2_000,
+  restartMaxMs: 60_000,
+  errorThreshold: 5,
+  killEscalationMs: 2_000,
+  preambleDeadlineMs: 10_000,
+  connectRetryMs: 500,
+  bitRate: 8_000_000,
+  fps: 60,
+  iframeIntervalSec: 1,
+  repeatFrameMs: 100,
+  swapPollMs: 500,
+  acceptDeadlineMs: 30_000,
+};
 
 export interface AndroidStreamConfig {
   readonly adbPath: string;
@@ -29,6 +36,8 @@ export interface AndroidStreamConfig {
   /** 맥 로컬 포워딩 포트 (localabstract → tcp) */
   readonly mirrorPort: number;
   readonly logDir: string;
+  /** 미러링 타이밍 (env 조정) — 미지정 시 기본값 */
+  readonly tuning?: AndroidMirrorTuning;
 }
 
 /** 소켓 최소 인터페이스 (테스트 주입용) */
@@ -66,13 +75,16 @@ export class AndroidStream {
   private restartAttempt = 0;
   private terminating: TrackedProcess[] = [];
   private readonly deps: AndroidStreamDeps;
+  private readonly tuning: AndroidMirrorTuning;
 
   constructor(
     private readonly config: AndroidStreamConfig,
     private readonly sendFrame: (frame: AgentFrame) => boolean,
     deps: Partial<AndroidStreamDeps> = {},
   ) {
+    this.tuning = config.tuning ?? DEFAULT_MIRROR_TUNING;
     const adb = new AdbClient(config.adbPath);
+    const tuning = this.tuning;
     this.deps = {
       runAdb: deps.runAdb ?? ((args, timeoutMs) => adb.run(args, timeoutMs)),
       spawnDaemon:
@@ -81,6 +93,13 @@ export class AndroidStream {
           spawnLogged(config.adbPath, [
             '-s', config.serial, 'shell',
             `CLASSPATH=${DEVICE_DEX_PATH}`, 'app_process', '/', DAEMON_ENTRY,
+            // device 인코더 데몬 튜닝 전달 (Args.kt와 계약 일치)
+            '--bitrate', String(tuning.bitRate),
+            '--fps', String(tuning.fps),
+            '--iframe', String(tuning.iframeIntervalSec),
+            '--repeat-ms', String(tuning.repeatFrameMs),
+            '--swap-poll-ms', String(tuning.swapPollMs),
+            '--accept-deadline-ms', String(tuning.acceptDeadlineMs),
           ], logPath)),
       connect: deps.connect ?? ((port) => netConnect(port, '127.0.0.1')),
     };
@@ -183,7 +202,7 @@ export class AndroidStream {
           this.connectTimer = null;
           if (!this.isActive || this.session !== session) return;
           this.connectSocket(session);
-        }, CONNECT_RETRY_MS);
+        }, this.tuning.connectRetryMs);
         return;
       }
       logger.warn({ serial: this.config.serial }, '미러링 소켓 단선 — 재기동');
@@ -227,7 +246,7 @@ export class AndroidStream {
       if (!this.isActive || this.session !== session || session.parser.preamble) return;
       logger.error({ serial: this.config.serial }, '프리앰블 데드라인 초과 — 데몬 재기동');
       this.scheduleRestart();
-    }, PREAMBLE_DEADLINE_MS);
+    }, this.tuning.preambleDeadlineMs);
     this.preambleTimer.unref();
   }
 
@@ -236,9 +255,9 @@ export class AndroidStream {
     this.clearTimers();
     this.teardownSession();
 
-    const delay = Math.min(RESTART_BASE_MS * 2 ** this.restartAttempt, RESTART_MAX_MS);
+    const delay = Math.min(this.tuning.restartBaseMs * 2 ** this.restartAttempt, this.tuning.restartMaxMs);
     this.restartAttempt += 1;
-    if (this.restartAttempt >= RESTART_ERROR_THRESHOLD) {
+    if (this.restartAttempt >= this.tuning.errorThreshold) {
       logger.error(
         { serial: this.config.serial, attempt: this.restartAttempt, delay },
         '미러링 연속 재기동 — 데몬 로그(android-mirror-*.log)·hidden API 지원 여부 확인 필요',
@@ -265,7 +284,7 @@ export class AndroidStream {
     const escalation = setTimeout(() => {
       if (tracked.hasExited) return;
       signalProcessTree(tracked, 'SIGKILL');
-    }, KILL_ESCALATION_MS);
+    }, this.tuning.killEscalationMs);
     escalation.unref();
   }
 

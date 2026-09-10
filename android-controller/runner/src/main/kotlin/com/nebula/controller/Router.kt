@@ -10,16 +10,18 @@ class Router(
     private val token: String?,
     private val actions: ActionHandler,
     private val queue: ActionQueue,
+    private val tuning: RunnerTuning,
 ) {
     private companion object {
         const val MAX_COORDINATE = 10_000.0
         const val MAX_TEXT_LENGTH = 4_000
-        /** Agent HTTP 타임아웃(10초)보다 낮게 — 서버 DTO는 5초로 더 엄격 */
-        const val MAX_SWIPE_DURATION_MS = 8_000.0
         const val DEFAULT_SWIPE_DURATION_MS = 300.0
-        /** UiAutomation 큐 대기+실행 상한 — 초과 시 503 */
-        const val ACTION_TIMEOUT_MS = 9_000L
     }
+
+    /** UiAutomation 큐 대기+실행 상한 — 초과 시 503 (Agent env로 조정) */
+    private val actionTimeoutMs: Long = tuning.actionTimeoutMs
+    /** 스와이프 최대 지속 — Agent env로 조정 */
+    private val maxSwipeDurationMs: Double = tuning.maxSwipeDurationMs
 
     private val handlers: Map<String, (Map<String, Any?>) -> HttpResponse> = mapOf(
         "/tap" to ::handleTap,
@@ -54,7 +56,7 @@ class Router(
     private fun handleTap(body: Map<String, Any?>): HttpResponse {
         val x = coordinate(body["x"]) ?: return badRequest("x·y는 0~${MAX_COORDINATE.toInt()} 범위 숫자")
         val y = coordinate(body["y"]) ?: return badRequest("x·y는 0~${MAX_COORDINATE.toInt()} 범위 숫자")
-        val injected = queue.submit(ACTION_TIMEOUT_MS) { actions.tap(x.toFloat(), y.toFloat()) }
+        val injected = queue.submit(actionTimeoutMs) { actions.tap(x.toFloat(), y.toFloat()) }
         if (!injected) return HttpResponse(500, mapOf("ok" to false, "error" to "탭 주입 실패"))
         return ok()
     }
@@ -68,10 +70,10 @@ class Router(
             return badRequest("fromX/fromY/toX/toY는 0~${MAX_COORDINATE.toInt()} 범위 숫자")
         }
         val durationMs = numeric(body["durationMs"]) ?: DEFAULT_SWIPE_DURATION_MS
-        if (durationMs <= 0 || durationMs > MAX_SWIPE_DURATION_MS) {
-            return badRequest("durationMs는 1~${MAX_SWIPE_DURATION_MS.toInt()} 범위")
+        if (durationMs <= 0 || durationMs > maxSwipeDurationMs) {
+            return badRequest("durationMs는 1~${maxSwipeDurationMs.toInt()} 범위")
         }
-        val injected = queue.submit(ACTION_TIMEOUT_MS) {
+        val injected = queue.submit(actionTimeoutMs) {
             actions.swipe(fromX.toFloat(), fromY.toFloat(), toX.toFloat(), toY.toFloat(), durationMs.toLong())
         }
         if (!injected) return HttpResponse(500, mapOf("ok" to false, "error" to "스와이프 주입 실패"))
@@ -81,7 +83,7 @@ class Router(
     private fun handleType(body: Map<String, Any?>): HttpResponse {
         val text = body["text"] as? String ?: return badRequest("text는 ${MAX_TEXT_LENGTH}자 이하 문자열")
         if (text.length > MAX_TEXT_LENGTH) return badRequest("text는 ${MAX_TEXT_LENGTH}자 이하 문자열")
-        val typed = queue.submit(ACTION_TIMEOUT_MS) { actions.typeText(text) }
+        val typed = queue.submit(actionTimeoutMs) { actions.typeText(text) }
         if (!typed) {
             return HttpResponse(
                 500,
@@ -93,7 +95,7 @@ class Router(
 
     private fun handlePress(body: Map<String, Any?>): HttpResponse {
         val button = body["button"] as? String ?: return badRequest("button은 home|back")
-        val pressed = queue.submit(ACTION_TIMEOUT_MS) { actions.press(button) }
+        val pressed = queue.submit(actionTimeoutMs) { actions.press(button) }
             ?: return badRequest("button은 home|back")
         if (!pressed) return HttpResponse(500, mapOf("ok" to false, "error" to "버튼 주입 실패"))
         return ok()
@@ -101,14 +103,14 @@ class Router(
 
     private fun handleUiDump(body: Map<String, Any?>): HttpResponse {
         val bundleId = body["bundleId"] as? String
-        val tree = queue.submit(ACTION_TIMEOUT_MS) { actions.uiDump(bundleId) }
+        val tree = queue.submit(actionTimeoutMs) { actions.uiDump(bundleId) }
         return HttpResponse(200, mapOf("ok" to true, "tree" to tree))
     }
 
     @Suppress("UNUSED_PARAMETER")
     private fun handleScreenshot(body: Map<String, Any?>): HttpResponse {
         // 캡처만 큐 안 — JPEG 인코딩·base64는 워커 스레드 (iOS 백로그 "인코딩이 러너 점유" 해소)
-        val capture = queue.submit(ACTION_TIMEOUT_MS) { actions.captureScreen() }
+        val capture = queue.submit(actionTimeoutMs) { actions.captureScreen() }
             ?: return HttpResponse(500, mapOf("ok" to false, "error" to "capture 실패"))
         val encoded = actions.encodeScreenshot(capture)
         return HttpResponse(

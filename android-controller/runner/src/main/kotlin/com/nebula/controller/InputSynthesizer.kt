@@ -14,13 +14,16 @@ import java.lang.reflect.Method
  * 유일한 선택적 hidden 호출: injectInputEvent 3인자(waitForAnimations=false, @TestApi) —
  * 실패 시 public 2인자 폴백 (iOS EventSynthesizer 우선 + XCUI 폴백 구조와 대칭)
  */
-class InputSynthesizer(private val automation: UiAutomation) {
+class InputSynthesizer(
+    private val automation: UiAutomation,
+    /** 스와이프 MOVE 간격 (ms, ~120Hz) — Agent env로 조정 */
+    private val stepMs: Long = DEFAULT_STEP_MS,
+) {
 
-    private companion object {
-        const val TAG = "NebulaController"
-        /** 스와이프 MOVE 간격 (~120Hz) */
-        const val STEP_MS = 8L
-        const val MAX_STEPS = 200L
+    companion object {
+        private const val TAG = "NebulaController"
+        const val DEFAULT_STEP_MS = 8L
+        private const val MAX_STEPS = 200L
     }
 
     /** waitForAnimations=false 오버로드 — 없으면 null(폴백), 1회만 로그 */
@@ -53,7 +56,7 @@ class InputSynthesizer(private val automation: UiAutomation) {
     }
 
     fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMs: Long): Boolean {
-        val steps = (durationMs / STEP_MS).coerceIn(2L, MAX_STEPS)
+        val steps = (durationMs / stepMs).coerceIn(2L, MAX_STEPS)
         val downTime = SystemClock.uptimeMillis()
 
         val down = motion(downTime, downTime, MotionEvent.ACTION_DOWN, fromX, fromY)
