@@ -37,6 +37,13 @@ const FIXTURE = {
         deviceProperties: { name: 'Apple Watch', osVersionNumber: '10.0' },
         hardwareProperties: { udid: '00008310-ZZZZ', platform: 'watchOS' },
       },
+      {
+        identifier: 'DISC-1',
+        // USB 분리돼도 pairingState는 'paired'로 남음 — tunnelState로 실연결 판정
+        connectionProperties: { pairingState: 'paired', tunnelState: 'unavailable' },
+        deviceProperties: { name: '연결 끊긴 iPhone', osVersionNumber: '17.0' },
+        hardwareProperties: { udid: '00008110-DISC', platform: 'iOS', deviceType: 'iPhone' },
+      },
     ],
   },
 };
@@ -57,11 +64,12 @@ describe('parseDevicectlOutput', () => {
     ]);
   });
 
-  test('watchOS·미페어링 기기 제외', () => {
+  test('watchOS·미페어링·연결 끊긴(tunnelState unavailable) 기기 제외', () => {
     const ids = parseDevicectlOutput(FIXTURE).map((device) => device.id);
 
     expect(ids).not.toContain('00008310-ZZZZ');
     expect(ids).not.toContain('00008110-YYYY');
+    expect(ids).not.toContain('00008110-DISC');
   });
 
   test('형식 불일치·필드 누락은 빈 배열 (throw 금지)', () => {

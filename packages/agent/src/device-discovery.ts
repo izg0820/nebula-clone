@@ -51,10 +51,15 @@ function toRegisterInput(entry: unknown): RegisterDeviceInput | null {
   return { id: udid, name, platform: 'ios', osVersion, tags: [] };
 }
 
-/** 페어링된 기기만 등록 대상 (미페어링 기기는 제어 불가) */
-function isPaired(entry: unknown): boolean {
+/**
+ * 제어 가능한 기기만 등록 대상 — 페어링 + 터널 연결.
+ * pairingState는 USB를 뽑아도 'paired'로 남으므로, 실연결은 tunnelState로 판정
+ * ('unavailable'/'disconnected'면 제어 불가 → 목록에서 제외해 유령 online 방지)
+ */
+function isConnected(entry: unknown): boolean {
   const connection = getRecord(entry, 'connectionProperties');
-  return getString(connection, 'pairingState') === 'paired';
+  if (getString(connection, 'pairingState') !== 'paired') return false;
+  return getString(connection, 'tunnelState') !== 'unavailable';
 }
 
 /** `devicectl list devices --json-output` 결과 파싱 — 형식 불일치는 빈 배열 */
@@ -63,7 +68,7 @@ export function parseDevicectlOutput(json: unknown): RegisterDeviceInput[] {
   if (!result || !Array.isArray(result.devices)) return [];
 
   return result.devices
-    .filter(isPaired)
+    .filter(isConnected)
     .map(toRegisterInput)
     .filter((device): device is RegisterDeviceInput => device !== null);
 }
