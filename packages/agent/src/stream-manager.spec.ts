@@ -2,6 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { AgentFrame, FRAME_FORMAT_H264 } from '@nebula/shared';
+import { H264Stream } from './h264-stream';
 import { StreamManager } from './stream-manager';
 
 /** mirror-helper 계약 재현: stderr에 해상도, stdout에 [u32 len][u8 isKey][payload] 반복 */
@@ -13,7 +14,7 @@ while true; do
 done
 `;
 
-describe('StreamManager (가짜 mirror-helper 연동)', () => {
+describe('StreamManager (가짜 mirror-helper 팩토리 연동)', () => {
   let workDir: string;
   let helperPath: string;
 
@@ -28,15 +29,18 @@ describe('StreamManager (가짜 mirror-helper 연동)', () => {
     rmSync(workDir, { recursive: true, force: true });
   });
 
-  test('발견된 기기의 헬퍼 기동 → H.264 프레임 푸시, stopAll → 중단', async () => {
-    const frames: AgentFrame[] = [];
-    const manager = new StreamManager(
-      (frame) => {
+  function h264Factory(frames: AgentFrame[]): StreamManager {
+    return new StreamManager((deviceId) =>
+      new H264Stream({ helperPath, deviceName: 'iPhone', deviceId }, (frame) => {
         frames.push(frame);
         return true;
-      },
-      { helperPath, resolveDeviceName: () => 'iPhone' },
+      }),
     );
+  }
+
+  test('발견된 기기의 스트림 기동 → H.264 프레임 푸시, stopAll → 중단', async () => {
+    const frames: AgentFrame[] = [];
+    const manager = h264Factory(frames);
 
     manager.syncAlwaysOn(['u1']);
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -58,32 +62,23 @@ describe('StreamManager (가짜 mirror-helper 연동)', () => {
     expect(frames.length).toBeLessThanOrEqual(countAfterStop + 2);
   });
 
-  test('기기 이름 미상이면 보류 — 헬퍼 미기동·프레임 없음', async () => {
-    const frames: AgentFrame[] = [];
-    const manager = new StreamManager(
-      (frame) => {
-        frames.push(frame);
-        return true;
-      },
-      { helperPath, resolveDeviceName: () => null },
-    );
+  test('팩토리가 null 반환(생성 보류)이면 미기동 — 다음 주기에 재시도 가능', async () => {
+    let attempts = 0;
+    const manager = new StreamManager(() => {
+      attempts += 1;
+      return null;
+    });
 
     manager.syncAlwaysOn(['unknown']);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    manager.syncAlwaysOn(['unknown']);
     manager.stopAll();
 
-    expect(frames).toHaveLength(0);
+    expect(attempts).toBe(2);
   });
 
   test('syncAlwaysOn에서 사라진 기기는 중지됨', async () => {
     const frames: AgentFrame[] = [];
-    const manager = new StreamManager(
-      (frame) => {
-        frames.push(frame);
-        return true;
-      },
-      { helperPath, resolveDeviceName: () => 'iPhone' },
-    );
+    const manager = h264Factory(frames);
 
     manager.syncAlwaysOn(['u1']);
     await new Promise((resolve) => setTimeout(resolve, 400));

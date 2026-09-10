@@ -63,6 +63,10 @@ else
     if [ -f "$android_runner_apk" ]; then
       agent_env_default NEBULA_ANDROID_RUNNER_APK "$android_runner_apk"
     fi
+    android_mirror_dex="$repo_root/android-controller/mirror/build/outputs/apk/debug/mirror-debug.apk"
+    if [ -f "$android_mirror_dex" ]; then
+      agent_env_default NEBULA_ANDROID_MIRROR_DEX "$android_mirror_dex"
+    fi
   fi
 
   # mirror-helper — 없으면 빌드 시도, 실패해도 미러링만 빠진 채 진행

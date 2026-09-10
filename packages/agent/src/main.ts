@@ -1,6 +1,7 @@
-import { RegisterDeviceInput } from '@nebula/shared';
+import { AgentFrame, RegisterDeviceInput } from '@nebula/shared';
 import { AdbClient } from './adb-client';
 import { AndroidDiscoverySource } from './android-discovery';
+import { AndroidStream } from './android-stream';
 import { AndroidSupervisor } from './android-supervisor';
 import { CommandExecutor } from './command-executor';
 import { CompositeResolver } from './composite-resolver';
@@ -11,6 +12,7 @@ import { IosDiscoverySource } from './device-discovery';
 import { DiscoveryAggregator } from './discovery-aggregator';
 import { DiscoverySource } from './discovery-source';
 import { logger } from './logger';
+import { H264Stream } from './h264-stream';
 import { ServerTunnel } from './server-tunnel';
 import { StreamManager } from './stream-manager';
 
@@ -29,21 +31,54 @@ function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupe
   });
 }
 
-/** H.264 미러링 관리자 — NEBULA_MIRROR_HELPER 미설정 시 미러링 비활성 */
+/**
+ * 미러링 관리자 — 플랫폼별 스트림 팩토리 주입.
+ * iOS는 NEBULA_MIRROR_HELPER, Android는 NEBULA_ANDROID_MIRROR_DEX — 둘 다 미설정 시 전체 비활성
+ */
 function createStreamManager(
-  helperPath: string | null,
+  config: ReturnType<typeof loadConfig>,
   tunnel: ServerTunnel,
   discovery: DiscoveryAggregator,
 ): StreamManager | null {
-  if (!helperPath) {
-    logger.warn('NEBULA_MIRROR_HELPER 미설정 — 미러링 비활성');
-    return null;
+  const helperPath = config.mirrorHelperPath;
+  const android = config.android;
+  const mirrorDexPath = android?.mirrorDexPath ?? null;
+  if (!helperPath) logger.warn('NEBULA_MIRROR_HELPER 미설정 — iOS 미러링 비활성');
+  if (android && !mirrorDexPath) {
+    logger.warn('NEBULA_ANDROID_MIRROR_DEX 미설정 — Android 미러링 비활성');
   }
-  return new StreamManager((frame) => tunnel.sendFrame(frame), {
-    helperPath,
-    // 발견 결과의 기기 이름 — mirror-helper의 캡처 장치 매칭(--name)에 사용
-    resolveDeviceName: (deviceId) =>
-      discovery.devices.find((device) => device.id === deviceId)?.name ?? null,
+  if (!helperPath && !mirrorDexPath) return null;
+
+  const sendFrame = (frame: AgentFrame): boolean => tunnel.sendFrame(frame);
+  // 기기별 미러링 포트 고정 할당 — 같은 기기는 재발견돼도 같은 포트 (잔존 forward와의 충돌 방지)
+  const mirrorPorts = new Map<string, number>();
+  const allocateMirrorPort = (serial: string): number => {
+    const existing = mirrorPorts.get(serial);
+    if (existing !== undefined) return existing;
+    const port = (android?.mirrorBasePort ?? 0) + mirrorPorts.size;
+    mirrorPorts.set(serial, port);
+    return port;
+  };
+
+  return new StreamManager((deviceId) => {
+    const device = discovery.devices.find((item) => item.id === deviceId);
+    if (!device) return null;
+    if (device.platform === 'android') {
+      if (!android || !mirrorDexPath) return null;
+      return new AndroidStream(
+        {
+          adbPath: android.adbPath,
+          serial: deviceId,
+          mirrorDexPath,
+          mirrorPort: allocateMirrorPort(deviceId),
+          logDir: android.logDir,
+        },
+        sendFrame,
+      );
+    }
+    if (!helperPath) return null;
+    // iOS: mirror-helper의 캡처 장치 매칭(--name)에 기기 이름 사용
+    return new H264Stream({ helperPath, deviceName: device.name, deviceId }, sendFrame);
   });
 }
 
@@ -109,7 +144,7 @@ async function main(): Promise<void> {
     },
     onCommand: (command) => executor.execute(command),
   });
-  const streamManager = createStreamManager(config.mirrorHelperPath, tunnel, discovery);
+  const streamManager = createStreamManager(config, tunnel, discovery);
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {
@@ -121,13 +156,13 @@ async function main(): Promise<void> {
     try {
       const shouldRegister = await discovery.refresh();
 
-      // 등록 여부와 무관하게 세션 동기화 — 연속 실패 임계로 목록이 비워진 경우에도 세션 정리.
-      // 수퍼바이저·미러링은 iOS 전용 (Android 세션은 3·4단계의 AndroidSupervisor가 담당)
+      // 등록 여부와 무관하게 세션 동기화 — 연속 실패 임계로 목록이 비워진 경우에도 세션 정리
       const iosDeviceIds = discovery.discoveredIds('ios');
+      const androidDeviceIds = discovery.discoveredIds('android');
       supervisor?.syncDevices(iosDeviceIds);
-      androidSupervisor?.syncDevices(discovery.discoveredIds('android'));
-      // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (iOS — Android 미러링은 4단계)
-      streamManager?.syncAlwaysOn(iosDeviceIds);
+      androidSupervisor?.syncDevices(androidDeviceIds);
+      // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (iOS·Android 공통, 팩토리가 플랫폼 분기)
+      streamManager?.syncAlwaysOn([...iosDeviceIds, ...androidDeviceIds]);
       if (!shouldRegister) return;
 
       const sent = tunnel.sendRegister(withReadinessTag(discovery.devices, resolver));

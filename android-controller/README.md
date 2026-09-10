@@ -21,14 +21,17 @@ hidden API 사용(미러링)은 **보유 기기에서 실측 검증된 조합만
 판정 요약 (2026-09-09, **접힌 상태**에서 실행):
 
 - **U1 통과** — shell(uid 2000)이 `CAPTURE_VIDEO_OUTPUT: granted=true`. app_process 미러링 데몬 설계 유효
-- **U3 (접힘 실측)** — 물리 패널 2개: 내부 2448×1848(state OFF), 커버 1248×1972(state ON).
-  활성 패널이 logical displayId 0에 매핑 — 미러링은 displayId 0 고정 + DisplayProbe 폴링으로
-  해상도 변화 감지. **펼친 상태 프로브는 미실행** — 교차 확인 필요
+- **U3 통과** (접힘·펼침 양쪽 실측, 2026-09-10 교차 확인) — 물리 패널 2개(내부 2448×1848,
+  커버 1248×1972)가 접힘 상태에 따라 스왑되며 **활성 패널이 항상 logical displayId 0에 매핑**.
+  미러링은 displayId 0 고정 + DisplayProbe 폴링으로 충분. 접힘→펼침 전환 시 데몬이
+  "해상도 변경: 1248x1972 → 2448x1848 — 세션 재구성" 후 스트림 자동 지속 (실기기 검증)
 - **U7** — SDK 37 기기. compileSdk 36 APK도 minSdk 34 ≤ 37이라 설치·구동 가능 (compileSdk는
   컴파일 타임 상한일 뿐) — 36 유지
 - **U6 참고** — `hidden_api_policy` 미설정(null)이 정상, 우리는 변경하지 않음
-- U2(hidden `DisplayManager.createVirtualDisplay` 존재)는 미러 데몬 기동 시 리플렉션 로그로 판명
-- U4(am instrument 수명)는 러너 실기기 검증 단계에서 확인
+- **U2 통과** (2026-09-10 실측) — `--probe` 결과: `createVirtualDisplay(hidden static): FOUND`,
+  `getDisplayInfo: OK`. 실제 미러링도 실기기 동작 확인 (활성 화면 50fps, 서버 릴레이 경유)
+- **U4 통과** (2026-09-09 실측) — `am force-stop` 시 호스트 `am instrument -w` 프로세스가 즉시 exit,
+  수퍼바이저가 감지해 9초 내 재기동·헬스 복구
 
 ### 프로브 원문 (ZFold8, 2026-09-09, 접힌 상태)
 

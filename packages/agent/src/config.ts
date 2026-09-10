@@ -34,6 +34,10 @@ export interface AndroidEnvConfig {
   /** 맥 로컬 포워딩 포트 시작값 (iOS 8200과 분리) */
   readonly basePort: number;
   readonly logDir: string;
+  /** 미러링 데몬 dex(apk) 경로 — 미지정 시 Android 미러링 비활성 */
+  readonly mirrorDexPath: string | null;
+  /** 미러링 포워딩 포트 시작값 (러너 basePort와 분리 — 기본 8400) */
+  readonly mirrorBasePort: number;
 }
 
 /** 수퍼바이저 환경 설정 */
@@ -240,6 +244,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
 }
 
 const DEFAULT_ANDROID_BASE_PORT = 8300;
+const DEFAULT_ANDROID_MIRROR_BASE_PORT = 8400;
 
 /** NEBULA_ADB_ENABLED=true일 때 Android 설정 로드 — 경로들은 기동 시점에 존재 검증 */
 export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | null {
@@ -263,21 +268,32 @@ export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | n
     throw new Error(`NEBULA_ANDROID_BASE_PORT는 ${MAX_BASE_PORT} 이하여야 함`);
   }
 
+  const mirrorBasePort = parsePositiveInt(
+    'NEBULA_ANDROID_MIRROR_BASE_PORT',
+    env.NEBULA_ANDROID_MIRROR_BASE_PORT,
+    DEFAULT_ANDROID_MIRROR_BASE_PORT,
+  );
+  if (mirrorBasePort > MAX_BASE_PORT) {
+    throw new Error(`NEBULA_ANDROID_MIRROR_BASE_PORT는 ${MAX_BASE_PORT} 이하여야 함`);
+  }
+
   return {
     adbPath,
-    runnerApkPath: parseAndroidRunnerApk(env.NEBULA_ANDROID_RUNNER_APK),
+    runnerApkPath: parseAndroidArtifact('NEBULA_ANDROID_RUNNER_APK', env.NEBULA_ANDROID_RUNNER_APK),
     basePort,
     logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(homedir(), '.nebula', 'logs'),
+    mirrorDexPath: parseAndroidArtifact('NEBULA_ANDROID_MIRROR_DEX', env.NEBULA_ANDROID_MIRROR_DEX),
+    mirrorBasePort,
   };
 }
 
-/** 지정 시 존재 확인 — 경로 오타가 무한 install 재시도로만 드러나지 않게 */
-function parseAndroidRunnerApk(raw: string | undefined): string | null {
+/** 지정 시 존재 확인 — 경로 오타가 무한 재시도 루프로만 드러나지 않게 */
+function parseAndroidArtifact(name: string, raw: string | undefined): string | null {
   if (!raw || raw.trim().length === 0) return null;
   try {
     accessSync(raw, constants.R_OK);
   } catch {
-    throw new Error(`NEBULA_ANDROID_RUNNER_APK 경로 없음: ${raw} — scripts/build-android.sh로 빌드`);
+    throw new Error(`${name} 경로 없음: ${raw} — scripts/build-android.sh로 빌드`);
   }
   return raw;
 }
