@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { decodeViewerFrame } from '@nebula/shared';
-import { ApiError, NebulaClient, toErrorMessage } from '@nebula/client';
+import { ApiError, DevicePlatform, NebulaClient, toErrorMessage } from '@nebula/client';
 import { interpretGesture, toDevicePoint, ScreenSize } from './coordinates';
 
 interface ScreenViewProps {
@@ -9,6 +9,7 @@ interface ScreenViewProps {
   readonly token: string;
   readonly deviceId: string;
   readonly deviceName: string;
+  readonly platform: DevicePlatform;
   readonly occupantId: string;
   readonly onError: (message: string) => void;
   /** 점유가 서버에서 무효(403 등)로 판명됐을 때 — 세션 정리용 */
@@ -183,6 +184,7 @@ export function ScreenView({
   token,
   deviceId,
   deviceName,
+  platform,
   occupantId,
   onError,
   onOccupationLost,
@@ -392,8 +394,14 @@ export function ScreenView({
     });
   }, [api, deviceId, occupantId, handleActionError]);
 
-  /** iOS '뒤로' = 왼쪽 엣지 스와이프 */
+  /** '뒤로' — Android는 하드웨어 back 버튼, iOS는 왼쪽 엣지 스와이프(하드웨어 back 없음) */
   const handleBack = useCallback(() => {
+    if (platform === 'android') {
+      api
+        .pressButton({ deviceId, occupantId }, 'back')
+        .catch((error: unknown) => handleActionError('뒤로가기 실패', error));
+      return;
+    }
     if (!screenPt) return;
     const midY = Math.round(screenPt.height / 2);
     api
@@ -402,7 +410,7 @@ export function ScreenView({
         { fromX: 1, fromY: midY, toX: Math.round(screenPt.width * 0.6), toY: midY, durationMs: 250 },
       )
       .catch((error: unknown) => handleActionError('뒤로가기 실패', error));
-  }, [api, deviceId, occupantId, screenPt, handleActionError]);
+  }, [api, platform, deviceId, occupantId, screenPt, handleActionError]);
 
   const handleType = useCallback(() => {
     if (text.length === 0) return;
@@ -419,7 +427,11 @@ export function ScreenView({
         <span className="device-name">{deviceName}</span>
         {hasFrame && <span className="fps-badge">{fps} fps</span>}
         <span className="spacer" />
-        <button className="btn" onClick={handleBack} title="왼쪽 엣지 스와이프">
+        <button
+          className="btn"
+          onClick={handleBack}
+          title={platform === 'android' ? '하드웨어 back' : '왼쪽 엣지 스와이프'}
+        >
           ← 뒤로
         </button>
         <button className="btn" onClick={handleHome}>

@@ -1,4 +1,4 @@
-import { PublicDevice } from '@nebula/client';
+import { platformLabel, PublicDevice } from '@nebula/client';
 
 interface DeviceCardProps {
   readonly device: PublicDevice;
@@ -37,7 +37,7 @@ export function DeviceCard({ device, isMine, hasOtherOccupation, onOccupy, onRel
         <span className="name">{device.name}</span>
       </div>
       <div className="meta">
-        iOS {device.osVersion} · {device.status}
+        {platformLabel(device.platform)} {device.osVersion} · {device.status}
       </div>
       <div className="badges">
         {isReady && <span className="badge ready">controller ready</span>}

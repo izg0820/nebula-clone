@@ -59,4 +59,12 @@ describe('DeviceCard', () => {
     expect(screen.getByRole('button', { name: '해제' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: '점유' })).toBeNull();
   });
+
+  test('플랫폼 라벨 표시 — ios는 iOS, android는 Android', () => {
+    renderCard();
+    expect(screen.getByText(/iOS 26\.0/)).toBeTruthy();
+    cleanup();
+    renderCard({ device: { ...DEVICE, platform: 'android', osVersion: '17' } });
+    expect(screen.getByText(/Android 17/)).toBeTruthy();
+  });
 });

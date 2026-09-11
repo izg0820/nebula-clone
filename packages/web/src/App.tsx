@@ -10,7 +10,8 @@ const DEVICE_POLL_INTERVAL_MS = parseIntervalEnv(
   import.meta.env.VITE_DEVICE_POLL_INTERVAL_MS,
   5_000,
 );
-const DEFAULT_SERVER_URL = 'http://localhost:3000';
+// dev.sh가 실제 서버 포트를 VITE_SERVER_URL로 주입 (server/.env의 PORT와 일치) — 미주입 시 3000
+const DEFAULT_SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3000';
 const MIN_TOKEN_LENGTH = 24;
 
 /** 점유 세션 (localStorage 보존 — 새로고침 시 유지) */
@@ -38,18 +39,15 @@ function loadStoredOccupation(): Occupation | null {
 }
 
 export function App() {
+  // 적용된(연결된) 설정 — 입력 필드는 SettingsPanel의 draft, "연결" 클릭 시에만 여기로 커밋
   const [serverUrl, setServerUrl] = useState(loadStored('serverUrl') || DEFAULT_SERVER_URL);
   const [token, setToken] = useState(loadStored('token'));
+  const [isConnected, setIsConnected] = useState(false);
   const [devices, setDevices] = useState<PublicDevice[]>([]);
   const [occupation, setOccupation] = useState<Occupation | null>(loadStoredOccupation);
   const [status, setStatus] = useState('');
 
   const api = useMemo(() => new NebulaClient({ baseUrl: serverUrl, token }), [serverUrl, token]);
-
-  useEffect(() => {
-    localStorage.setItem('serverUrl', serverUrl);
-    localStorage.setItem('token', token);
-  }, [serverUrl, token]);
 
   useEffect(() => {
     if (occupation) {
@@ -59,9 +57,28 @@ export function App() {
     localStorage.removeItem('occupation');
   }, [occupation]);
 
-  // 기기 목록 폴링 — 토큰이 유효 길이일 때만 (입력 중 타이핑마다 401 요청 방지)
+  const handleConnect = useCallback((nextServerUrl: string, nextToken: string) => {
+    if (nextToken.length < MIN_TOKEN_LENGTH) {
+      setStatus(`토큰은 ${MIN_TOKEN_LENGTH}자 이상이어야 합니다`);
+      return;
+    }
+    localStorage.setItem('serverUrl', nextServerUrl);
+    localStorage.setItem('token', nextToken);
+    setServerUrl(nextServerUrl);
+    setToken(nextToken);
+    setIsConnected(true);
+    setStatus('연결 중…');
+  }, []);
+
+  const handleDisconnect = useCallback(() => {
+    setIsConnected(false);
+    setDevices([]);
+    setStatus('연결 해제됨');
+  }, []);
+
+  // 기기 목록 폴링 — "연결" 상태일 때만 (자동 연결 안 함 — 명시적 버튼 필요)
   useEffect(() => {
-    if (token.length < MIN_TOKEN_LENGTH) return;
+    if (!isConnected) return;
     let isActive = true;
 
     async function poll(): Promise<void> {
@@ -69,10 +86,10 @@ export function App() {
         const list = await api.listDevices();
         if (isActive) {
           setDevices(list);
-          setStatus('');
+          setStatus(`연결됨 · ${serverUrl}`);
         }
       } catch (error) {
-        if (isActive) setStatus(`기기 목록 실패: ${(error as Error).message}`);
+        if (isActive) setStatus(`연결 실패: ${(error as Error).message} — 주소·토큰 확인 후 다시 연결`);
       }
     }
     void poll();
@@ -81,7 +98,7 @@ export function App() {
       isActive = false;
       clearInterval(timer);
     };
-  }, [api, token]);
+  }, [api, isConnected, serverUrl]);
 
   const handleOccupy = useCallback(
     (deviceId: string) => {
@@ -100,8 +117,8 @@ export function App() {
   // 점유 기기에 스크린샷 명령이 주기적으로 재발행됨 (러너 메인 스레드 점유 → 헬스 오탐)
   const handleOccupationLost = useCallback(() => setOccupation(null), []);
 
-  // 점유 sliding TTL 유지 — 30초마다 keepalive (활동 없으면 서버가 10분 후 회수)
-  useOccupationKeepalive(api, occupation, handleOccupationLost, setStatus);
+  // 점유 sliding TTL 유지 — 30초마다 keepalive (연결 상태에서만; 활동 없으면 서버가 10분 후 회수)
+  useOccupationKeepalive(api, isConnected ? occupation : null, handleOccupationLost, setStatus);
 
   const handleRelease = useCallback(() => {
     if (!occupation) return;
@@ -127,7 +144,6 @@ export function App() {
   }, [api, occupation]);
 
   const occupiedDevice = devices.find((device) => device.id === occupation?.deviceId);
-  const needsToken = token.length < MIN_TOKEN_LENGTH;
 
   return (
     <div className="app">
@@ -135,15 +151,17 @@ export function App() {
         <div className="logo">
           ☄️ Nebula <span>Console</span>
         </div>
-        <div className="tagline">iOS 디바이스 팜 — 보면서 조작하기</div>
+        <div className="tagline">iOS · Android 디바이스 팜 — 보면서 조작하기</div>
       </header>
 
       <div className="body">
         <aside className="sidebar">
           <div className="device-list">
             <div className="section-title">기기 ({devices.length})</div>
-            {needsToken && <p className="placeholder">토큰을 입력하면 기기 목록이 표시됩니다</p>}
-            {!needsToken && devices.length === 0 && (
+            {!isConnected && (
+              <p className="placeholder">아래 &lsquo;연결&rsquo; 버튼을 누르면 기기 목록이 표시됩니다</p>
+            )}
+            {isConnected && devices.length === 0 && (
               <p className="placeholder">등록된 기기 없음 — Agent 연결 대기</p>
             )}
             {devices.map((device) => (
@@ -158,15 +176,16 @@ export function App() {
             ))}
           </div>
           <SettingsPanel
-            serverUrl={serverUrl}
-            token={token}
-            onServerUrlChange={setServerUrl}
-            onTokenChange={setToken}
+            initialServerUrl={serverUrl}
+            initialToken={token}
+            isConnected={isConnected}
+            onConnect={handleConnect}
+            onDisconnect={handleDisconnect}
           />
         </aside>
 
         <main className="main">
-          {occupation && (
+          {isConnected && occupation && (
             <ScreenView
               key={occupation.deviceId}
               api={api}
@@ -174,13 +193,20 @@ export function App() {
               token={token}
               deviceId={occupation.deviceId}
               deviceName={occupiedDevice?.name ?? occupation.deviceId}
+              platform={occupiedDevice?.platform ?? 'ios'}
               occupantId={occupation.occupantId}
               onError={setStatus}
               onOccupationLost={handleOccupationLost}
               onRelease={handleRelease}
             />
           )}
-          {!occupation && (
+          {!isConnected && (
+            <div className="placeholder">
+              <div className="big">서버에 연결하세요</div>
+              <div>왼쪽 &lsquo;연결 설정&rsquo;에서 주소·토큰 입력 후 &lsquo;연결&rsquo;을 누르세요</div>
+            </div>
+          )}
+          {isConnected && !occupation && (
             <div className="placeholder">
               <div className="big">기기를 점유하면 화면이 여기 표시됩니다</div>
               <div>왼쪽 목록에서 초록 도트(controller ready) 기기를 점유하세요</div>

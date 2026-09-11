@@ -1,4 +1,4 @@
-import { DevicePlatform, DeviceTarget, NebulaClient, PublicDevice } from '@nebula/client';
+import { DevicePlatform, DeviceTarget, NebulaClient, platformLabel, PublicDevice } from '@nebula/client';
 import { CliFlags } from './args';
 import { EXIT_OK, UsageError } from './exit-codes';
 import { SessionStore } from './session-store';
@@ -100,7 +100,7 @@ function tagsSuffix(device: PublicDevice): string {
 }
 
 function deviceLine(device: PublicDevice): string {
-  return `${statusDot(device)} ${device.id}  ${device.name}  iOS ${device.osVersion}${tagsSuffix(device)}${occupiedSuffix(device)}`;
+  return `${statusDot(device)} ${device.id}  ${device.name}  ${platformLabel(device.platform)} ${device.osVersion}${tagsSuffix(device)}${occupiedSuffix(device)}`;
 }
 
 async function runHealth(context: CommandContext): Promise<number> {

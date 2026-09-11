@@ -3,6 +3,7 @@ export { DEFAULT_TIMEOUT_MS, defaultFetch } from './http-client';
 export type { FetchLike, HttpRequestInit, HttpResponseLike } from './http-client';
 export { NebulaClient } from './nebula-client';
 export type { NebulaClientOptions } from './nebula-client';
+export { platformLabel } from './platform';
 export type {
   DevicePlatform,
   DeviceTarget,
