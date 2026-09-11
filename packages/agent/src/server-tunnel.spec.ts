@@ -133,6 +133,7 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
           type: 'command',
           requestId: 'req-1',
           deviceId: 'u1',
+          occupantId: 'occupant-1',
           action: { kind: 'tap', x: 10, y: 20 },
         }),
       );
@@ -159,7 +160,13 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
   test('onCommand가 예외를 던져도 실패 outcome으로 회신', (done) => {
     server.on('connection', (socket) => {
       socket.send(
-        JSON.stringify({ type: 'command', requestId: 'req-2', deviceId: 'u1', action: { kind: 'uiDump' } }),
+        JSON.stringify({
+          type: 'command',
+          requestId: 'req-2',
+          deviceId: 'u1',
+          occupantId: 'occupant-1',
+          action: { kind: 'uiDump' },
+        }),
       );
       socket.on('message', (data) => {
         const message = JSON.parse(data.toString());
@@ -194,4 +201,37 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
     tunnel = closable;
     closable.connect();
   }, 10_000);
+
+  test('occupancyEnded 수신 시 onOccupancyEnded 호출 — 회신은 없음', (done) => {
+    const messagesFromAgent: unknown[] = [];
+    server.on('connection', (socket) => {
+      socket.send(
+        JSON.stringify({ type: 'occupancyEnded', deviceId: 'u1', occupantId: 'occupant-A' }),
+      );
+      socket.on('message', (data) => messagesFromAgent.push(JSON.parse(data.toString())));
+    });
+
+    tunnel = new ServerTunnel(createConfig(), {
+      onOpen: () => undefined,
+      onCommand: () => Promise.resolve({ ok: true, result: null }),
+      onOccupancyEnded: (deviceId, occupantId) => {
+        expect(deviceId).toBe('u1');
+        expect(occupantId).toBe('occupant-A');
+        // 종료 통지는 단방향 — commandResult가 나가면 안 됨
+        expect(messagesFromAgent).toHaveLength(0);
+        done();
+      },
+    });
+    tunnel.connect();
+  });
+
+  test('연결 종료 시 onDisconnect 호출 — 세대 폐기 트리거', (done) => {
+    server.on('connection', (socket) => socket.close(1000));
+
+    tunnel = new ServerTunnel(createConfig(), {
+      onOpen: () => undefined,
+      onDisconnect: () => done(),
+    });
+    tunnel.connect();
+  });
 });

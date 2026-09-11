@@ -32,10 +32,22 @@ export interface CommandMessage {
   readonly type: 'command';
   readonly requestId: string;
   readonly deviceId: string;
+  /**
+   * 이 명령을 낸 점유 세대 — 서버가 전송 직전 검증한 값.
+   * Agent는 큐에서 꺼낼 때 이 값으로 재확인해 인계 이후의 유령 입력을 막는다
+   */
+  readonly occupantId: string;
   readonly action: DeviceAction;
 }
 
-export type ServerMessage = CommandMessage;
+/** 점유 종료 통지 — 그 세대의 대기 명령을 Agent가 폐기하게 함 */
+export interface OccupancyEndedMessage {
+  readonly type: 'occupancyEnded';
+  readonly deviceId: string;
+  readonly occupantId: string;
+}
+
+export type ServerMessage = CommandMessage | OccupancyEndedMessage;
 
 // ── 빌더 ─────────────────────────────────────────────────
 
@@ -54,9 +66,17 @@ export function buildHeartbeatMessage(deviceIds: readonly string[]): HeartbeatMe
 export function buildCommandMessage(
   requestId: string,
   deviceId: string,
+  occupantId: string,
   action: DeviceAction,
 ): CommandMessage {
-  return { type: 'command', requestId, deviceId, action };
+  return { type: 'command', requestId, deviceId, occupantId, action };
+}
+
+export function buildOccupancyEndedMessage(
+  deviceId: string,
+  occupantId: string,
+): OccupancyEndedMessage {
+  return { type: 'occupancyEnded', deviceId, occupantId };
 }
 
 export function buildCommandResultMessage(

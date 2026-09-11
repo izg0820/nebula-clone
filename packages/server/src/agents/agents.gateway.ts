@@ -7,7 +7,9 @@ import {
 } from '@nestjs/websockets';
 import {
   buildCommandMessage,
+  buildOccupancyEndedMessage,
   COMMAND_ERROR_AGENT_DISCONNECTED,
+  COMMAND_ERROR_OCCUPATION_ENDED,
   COMMAND_ERROR_TIMEOUT,
   COMMAND_ERROR_UNSUPPORTED,
   CommandOutcome,
@@ -49,6 +51,9 @@ interface AgentSocket extends WebSocket {
 /** 응답 대기 중인 명령 — agentId로 스코프 (다른 Agent의 응답이 매칭되지 않도록) */
 interface PendingCommand {
   readonly agentId: string;
+  readonly deviceId: string;
+  /** 이 명령을 낸 점유 세대 — 점유가 끝나면 이 세대의 대기 응답을 즉시 실패시킴 */
+  readonly occupantId: string;
   readonly resolve: (outcome: CommandOutcome) => void;
   readonly timer: NodeJS.Timeout;
 }
@@ -175,6 +180,29 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   /**
+   * 점유 종료 통지 — 해당 Agent의 대기 명령을 폐기시키고, 아직 응답을 못 받은 명령은 즉시 실패 처리.
+   * 기기에서 이미 실행 중인 작업은 취소할 수 없으므로 "응답 경로만 차단"이 경계
+   */
+  revokeOccupancy(deviceId: string, occupantId: string, agentId: string | null): void {
+    this.failPendingByOccupation(deviceId, occupantId);
+    if (!agentId) return;
+    const socket = this.agentSockets.get(agentId);
+    if (!socket || socket.readyState !== socket.OPEN) return;
+    socket.send(JSON.stringify(buildOccupancyEndedMessage(deviceId, occupantId)));
+  }
+
+  /** 끝난 세대의 in-flight 명령 실패 처리 — 인계 이후 이전 점유자에게 결과가 흘러가지 않도록 */
+  private failPendingByOccupation(deviceId: string, occupantId: string): void {
+    for (const [requestId, pending] of this.pendingCommands) {
+      if (pending.deviceId !== deviceId) continue;
+      if (pending.occupantId !== occupantId) continue;
+      this.pendingCommands.delete(requestId);
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: COMMAND_ERROR_OCCUPATION_ENDED });
+    }
+  }
+
+  /**
    * Agent에 기기 명령 전송 후 응답 대기
    * @throws AgentNotConnectedError 터널 미연결
    * @return 타임아웃 시 { ok: false, error: 'timeout' }
@@ -182,6 +210,7 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async sendCommand(
     agentId: string,
     deviceId: string,
+    occupantId: string,
     action: DeviceAction,
   ): Promise<CommandOutcome> {
     const socket = this.agentSockets.get(agentId);
@@ -202,8 +231,8 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         resolve({ ok: false, error: COMMAND_ERROR_TIMEOUT });
       }, COMMAND_TIMEOUT_MS);
 
-      this.pendingCommands.set(requestId, { agentId, resolve, timer });
-      socket.send(JSON.stringify(buildCommandMessage(requestId, deviceId, action)));
+      this.pendingCommands.set(requestId, { agentId, deviceId, occupantId, resolve, timer });
+      socket.send(JSON.stringify(buildCommandMessage(requestId, deviceId, occupantId, action)));
     });
   }
 

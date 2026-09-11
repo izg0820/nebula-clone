@@ -37,6 +37,7 @@ describe('parseAgentMessage', () => {
         type: 'command',
         requestId: 'req-1',
         deviceId: 'u1',
+        occupantId: 'occupant-1',
         action: { kind: 'pressButton', button },
       });
 
@@ -99,7 +100,7 @@ describe('parseAgentMessage', () => {
 
 describe('parseServerMessage', () => {
   test('command 메시지 파싱 — 액션 종류별', () => {
-    const base = { type: 'command', requestId: 'r1', deviceId: 'u1' };
+    const base = { type: 'command', requestId: 'r1', deviceId: 'u1', occupantId: 'occupant-1' };
 
     expect(
       parseServerMessage(JSON.stringify({ ...base, action: { kind: 'tap', x: 10, y: 20 } })),
@@ -126,7 +127,7 @@ describe('parseServerMessage', () => {
   });
 
   test('필드 누락·비유한 좌표는 null', () => {
-    const base = { type: 'command', requestId: 'r1', deviceId: 'u1' };
+    const base = { type: 'command', requestId: 'r1', deviceId: 'u1', occupantId: 'occupant-1' };
 
     expect(parseServerMessage(JSON.stringify({ ...base, action: { kind: 'tap', x: 10 } }))).toBeNull();
     expect(
@@ -134,5 +135,23 @@ describe('parseServerMessage', () => {
     ).toBeNull();
     expect(parseServerMessage(JSON.stringify({ type: 'command', action: null }))).toBeNull();
     expect(parseServerMessage('broken')).toBeNull();
+  });
+
+  test('occupantId 누락·형식 위반 command는 폐기 (세대 없는 명령은 실행 금지)', () => {
+    const action = { kind: 'uiDump' };
+    const withoutOccupant = { type: 'command', requestId: 'r1', deviceId: 'u1', action };
+
+    expect(parseServerMessage(JSON.stringify(withoutOccupant))).toBeNull();
+    expect(
+      parseServerMessage(JSON.stringify({ ...withoutOccupant, occupantId: '경로/삽입' })),
+    ).toBeNull();
+  });
+
+  test('occupancyEnded 파싱 — deviceId·occupantId 형식 검증', () => {
+    const ended = { type: 'occupancyEnded', deviceId: 'u1', occupantId: 'occupant-1' };
+
+    expect(parseServerMessage(JSON.stringify(ended))).toEqual(ended);
+    expect(parseServerMessage(JSON.stringify({ type: 'occupancyEnded', deviceId: 'u1' }))).toBeNull();
+    expect(parseServerMessage(JSON.stringify({ ...ended, deviceId: '../etc' }))).toBeNull();
   });
 });

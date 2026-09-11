@@ -1,4 +1,4 @@
-import { CommandMessage, CommandOutcome } from '@nebula/shared';
+import { COMMAND_ERROR_OCCUPATION_ENDED, CommandMessage, CommandOutcome } from '@nebula/shared';
 import { ControllerClient } from './controller-client';
 import { ControllerEndpointResolver } from './controller-registry';
 import { logger } from './logger';
@@ -14,6 +14,9 @@ const QUEUE_STALE_MS = 15_000;
 /**
  * 서버 명령 → 해당 기기 Controller로 라우팅
  * 주소는 resolver(정적 설정 또는 수퍼바이저)가 해석, 기기별 직렬 큐로 전송
+ *
+ * 큐에서 대기하는 사이 점유가 바뀔 수 있으므로, 실행 직전에 명령의 점유 세대를
+ * 현재 세대와 대조한다 (인계 이후 이전 점유자의 유령 입력 차단)
  */
 export class CommandExecutor {
   private readonly clients = new Map<string, ControllerClient>();
@@ -21,6 +24,11 @@ export class CommandExecutor {
   private readonly deviceQueues = new Map<string, Promise<unknown>>();
   /** 기기별 대기 깊이 */
   private readonly queueDepths = new Map<string, number>();
+  /**
+   * 기기별 현재 점유 세대 — 서버가 전송 직전 검증한 값만 들어온다.
+   * 갱신은 새 명령 수신, 삭제는 점유 종료 통지·터널 단선
+   */
+  private readonly occupations = new Map<string, string>();
 
   constructor(
     private readonly resolver: ControllerEndpointResolver,
@@ -41,6 +49,9 @@ export class CommandExecutor {
       return { ok: false, error: '명령 대기열 초과 — Controller 응답 지연, 잠시 후 재시도' };
     }
 
+    // 서버가 이 명령의 점유를 검증한 뒤 보냈으므로, 새 세대면 이전 세대 대기 명령은 그 순간 무효
+    this.occupations.set(command.deviceId, command.occupantId);
+
     const client = this.clientFor(baseUrl);
     const enqueuedAtMs = Date.now();
     this.queueDepths.set(command.deviceId, depth + 1);
@@ -48,6 +59,13 @@ export class CommandExecutor {
     const run = previous.then((): Promise<CommandOutcome> | CommandOutcome => {
       if (Date.now() - enqueuedAtMs > QUEUE_STALE_MS) {
         return { ok: false, error: '큐 대기 초과 — 명령 폐기 (서버 타임아웃 경과)' };
+      }
+      if (this.occupations.get(command.deviceId) !== command.occupantId) {
+        logger.warn(
+          { deviceId: command.deviceId },
+          '대기 중 점유가 끝난 명령 폐기 (인계 후 유령 입력 방지)',
+        );
+        return { ok: false, error: COMMAND_ERROR_OCCUPATION_ENDED };
       }
       return client.execute(command.action);
     });
@@ -62,6 +80,17 @@ export class CommandExecutor {
         }),
     );
     return run;
+  }
+
+  /** 점유 종료 통지 — 그 세대의 대기 명령을 실행 직전 검증에서 떨어뜨린다 */
+  revokeOccupation(deviceId: string, occupantId: string): void {
+    if (this.occupations.get(deviceId) !== occupantId) return;
+    this.occupations.delete(deviceId);
+  }
+
+  /** 터널 단선 — 서버 검증을 거친 적 없는 세대가 남지 않도록 전부 폐기 */
+  revokeAllOccupations(): void {
+    this.occupations.clear();
   }
 
   private clientFor(baseUrl: string): ControllerClient {

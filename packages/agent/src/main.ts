@@ -131,6 +131,10 @@ async function main(): Promise<void> {
       void discoverAndRegister();
     },
     onCommand: (command) => executor.execute(command),
+    // 점유가 끝나면 그 세대의 대기 명령을 폐기 — 인계 이후 유령 입력 차단
+    onOccupancyEnded: (deviceId, occupantId) => executor.revokeOccupation(deviceId, occupantId),
+    // 단선 중 서버에서 점유가 바뀌었을 수 있으므로 세대를 전부 버림 (재연결 후 새 명령부터 유효)
+    onDisconnect: () => executor.revokeAllOccupations(),
   });
   const streamManager = createStreamManager(config, tunnel, discovery);
 

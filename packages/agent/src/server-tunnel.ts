@@ -53,6 +53,10 @@ export interface TunnelCallbacks {
   readonly onOpen: () => void;
   /** 서버 명령 수신 시 — 실행 결과를 반환하면 터널이 commandResult로 회신 */
   readonly onCommand?: (command: CommandMessage) => Promise<CommandOutcome>;
+  /** 점유 종료 통지 — 그 세대의 대기 명령을 폐기 */
+  readonly onOccupancyEnded?: (deviceId: string, occupantId: string) => void;
+  /** 터널 단선 — 서버 검증을 거치지 않은 옛 세대가 남지 않도록 전부 폐기 */
+  readonly onDisconnect?: () => void;
 }
 
 /** 테스트용 타이밍 오버라이드 */
@@ -133,6 +137,7 @@ export class ServerTunnel {
     socket.on('close', (code: number) => {
       this.stopConnectionTimers();
       this.logClose(code);
+      this.callbacks.onDisconnect?.();
       this.scheduleReconnect(code);
     });
 
@@ -181,6 +186,11 @@ export class ServerTunnel {
     const message = parseServerMessage(raw);
     if (!message) {
       logger.warn('잘못된 서버 메시지 무시');
+      return;
+    }
+    if (message.type === 'occupancyEnded') {
+      logger.info({ deviceId: message.deviceId }, '점유 종료 통지 — 대기 명령 폐기');
+      this.callbacks.onOccupancyEnded?.(message.deviceId, message.occupantId);
       return;
     }
     if (!this.callbacks.onCommand) {

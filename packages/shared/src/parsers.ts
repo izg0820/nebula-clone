@@ -114,6 +114,13 @@ function isRequestId(value: unknown): value is string {
   return typeof value === 'string' && REQUEST_ID_PATTERN.test(value);
 }
 
+/** occupantId 허용 형식 — 서버가 randomUUID로 발급 (로그 인젝션·비정상 키 방지) */
+const OCCUPANT_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
+
+export function isOccupantId(value: unknown): value is string {
+  return typeof value === 'string' && OCCUPANT_ID_PATTERN.test(value);
+}
+
 /** 서버 → Agent 메시지 파싱 */
 export function parseServerMessage(raw: string): ServerMessage | null {
   const message = parseJson(raw);
@@ -123,13 +130,26 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     message.type === 'command' &&
     isRequestId(message.requestId) &&
     isDeviceId(message.deviceId) &&
+    isOccupantId(message.occupantId) &&
     isDeviceAction(message.action)
   ) {
     return {
       type: 'command',
       requestId: message.requestId,
       deviceId: message.deviceId,
+      occupantId: message.occupantId,
       action: message.action,
+    };
+  }
+  if (
+    message.type === 'occupancyEnded' &&
+    isDeviceId(message.deviceId) &&
+    isOccupantId(message.occupantId)
+  ) {
+    return {
+      type: 'occupancyEnded',
+      deviceId: message.deviceId,
+      occupantId: message.occupantId,
     };
   }
   return null;

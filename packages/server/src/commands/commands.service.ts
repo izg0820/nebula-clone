@@ -35,7 +35,7 @@ export class CommandsService {
     // getById→여기 사이에 점유가 바뀐 레이스도 여기서 403으로 차단됨
     this.devicesService.renewOccupation(deviceId, occupantId);
 
-    const outcome = await this.sendToAgent(device.agentId, deviceId, action);
+    const outcome = await this.sendToAgent(device.agentId, deviceId, occupantId, action);
     if (!outcome.ok && outcome.error === COMMAND_ERROR_UNSUPPORTED) {
       throw new BadRequestException('Agent가 지원하지 않는 액션 (Agent 업데이트 필요)');
     }
@@ -48,9 +48,14 @@ export class CommandsService {
     return outcome.result;
   }
 
-  private async sendToAgent(agentId: string, deviceId: string, action: DeviceAction) {
+  private async sendToAgent(
+    agentId: string,
+    deviceId: string,
+    occupantId: string,
+    action: DeviceAction,
+  ) {
     try {
-      return await this.agentsGateway.sendCommand(agentId, deviceId, action);
+      return await this.agentsGateway.sendCommand(agentId, deviceId, occupantId, action);
     } catch (error) {
       if (error instanceof AgentNotConnectedError) {
         throw new BadGatewayException('Agent 터널 미연결');

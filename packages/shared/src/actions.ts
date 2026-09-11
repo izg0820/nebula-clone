@@ -73,3 +73,5 @@ export const COMMAND_ERROR_TIMEOUT = 'timeout';
 export const COMMAND_ERROR_AGENT_DISCONNECTED = 'agent_disconnected';
 /** Agent가 스펙 교환에 포함하지 않은 액션 — 혼합 버전 배포 시 타임아웃 대신 즉시 거부 */
 export const COMMAND_ERROR_UNSUPPORTED = 'unsupported_action';
+/** 명령이 대기하는 사이 점유가 끝남 — 실행 없이 폐기 (인계 후 유령 입력 방지) */
+export const COMMAND_ERROR_OCCUPATION_ENDED = 'occupation_ended';

@@ -190,7 +190,7 @@ describe('AgentsGateway', () => {
       createRequest('/agent?token=agent-token&agentId=agent-1'),
     );
 
-    const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'tap', x: 1, y: 2 });
+    const pending = gateway.sendCommand('agent-1', 'udid-1', 'occupant-1', { kind: 'tap', x: 1, y: 2 });
 
     // 전송된 command 메시지 확인 후 Agent 응답 시뮬레이션
     const sent = JSON.parse(socket.sentPayloads[0]);
@@ -221,7 +221,7 @@ describe('AgentsGateway', () => {
         createRequest('/agent?token=agent-token&agentId=agent-1'),
       );
 
-      const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+      const pending = gateway.sendCommand('agent-1', 'udid-1', 'occupant-1', { kind: 'uiDump' });
       jest.advanceTimersByTime(20_000);
 
       await expect(pending).resolves.toEqual({ ok: false, error: 'timeout' });
@@ -238,7 +238,7 @@ describe('AgentsGateway', () => {
       createRequest('/agent?token=agent-token&agentId=agent-1'),
     );
 
-    const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+    const pending = gateway.sendCommand('agent-1', 'udid-1', 'occupant-1', { kind: 'uiDump' });
     gateway.handleDisconnect(socket as unknown as WebSocket);
 
     await expect(pending).resolves.toEqual({ ok: false, error: 'agent_disconnected' });
@@ -259,7 +259,7 @@ describe('AgentsGateway', () => {
         createRequest('/agent?token=agent-token&agentId=agent-2'),
       );
 
-      const pending = gateway.sendCommand('agent-1', 'udid-1', { kind: 'uiDump' });
+      const pending = gateway.sendCommand('agent-1', 'udid-1', 'occupant-1', { kind: 'uiDump' });
       const sent = JSON.parse(target.sentPayloads[0]);
 
       // 다른 Agent가 requestId를 가로채 응답 — 무시돼야 함
@@ -295,7 +295,7 @@ describe('AgentsGateway', () => {
       }),
     );
 
-    const outcome = await gateway.sendCommand('agent-1', 'u1', {
+    const outcome = await gateway.sendCommand('agent-1', 'u1', 'occupant-1', {
       kind: 'pressButton',
       button: 'home',
     });
@@ -324,7 +324,7 @@ describe('AgentsGateway', () => {
       }),
     );
 
-    void gateway.sendCommand('agent-1', 'u1', { kind: 'pressButton', button: 'home' });
+    void gateway.sendCommand('agent-1', 'u1', 'occupant-1', { kind: 'pressButton', button: 'home' });
 
     const commandMessages = socket.sentPayloads
       .map((payload) => JSON.parse(payload))
@@ -335,7 +335,7 @@ describe('AgentsGateway', () => {
   test('sendCommand는 터널 미연결이면 즉시 거부', async () => {
     const { gateway } = createGateway();
 
-    await expect(gateway.sendCommand('없는-agent', 'udid-1', { kind: 'uiDump' })).rejects.toThrow(
+    await expect(gateway.sendCommand('없는-agent', 'udid-1', 'occupant-1', { kind: 'uiDump' })).rejects.toThrow(
       AgentNotConnectedError,
     );
   });
@@ -418,5 +418,57 @@ describe('AgentsGateway', () => {
     gateway.handleDisconnect(socket as unknown as WebSocket);
 
     expect(service.handleAgentDisconnect).not.toHaveBeenCalled();
+  });
+
+  test('revokeOccupancy는 그 세대의 대기 명령을 실패시키고 Agent에 종료를 통지', async () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const pending = gateway.sendCommand('agent-1', 'udid-1', 'occupant-A', { kind: 'uiDump' });
+    gateway.revokeOccupancy('udid-1', 'occupant-A', 'agent-1');
+
+    expect(await pending).toEqual({ ok: false, error: 'occupation_ended' });
+    const ended = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'occupancyEnded');
+    expect(ended).toEqual([
+      { type: 'occupancyEnded', deviceId: 'udid-1', occupantId: 'occupant-A' },
+    ]);
+  });
+
+  test('revokeOccupancy는 다른 기기·다른 세대의 대기 명령을 건드리지 않음', async () => {
+    const { gateway } = createGateway();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    const other = gateway.sendCommand('agent-1', 'udid-2', 'occupant-A', { kind: 'uiDump' });
+    gateway.revokeOccupancy('udid-1', 'occupant-A', 'agent-1');
+    const sent = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'command');
+    // 대기 유지 확인 — Agent 응답으로 정상 resolve 되어야 함
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'commandResult',
+        requestId: sent[0].requestId,
+        outcome: { ok: true, result: null },
+      }),
+    );
+
+    expect(await other).toEqual({ ok: true, result: null });
+  });
+
+  test('Agent 미연결이어도 revokeOccupancy는 대기 명령만 정리 (throw 금지)', () => {
+    const { gateway } = createGateway();
+
+    expect(() => gateway.revokeOccupancy('udid-1', 'occupant-A', null)).not.toThrow();
   });
 });

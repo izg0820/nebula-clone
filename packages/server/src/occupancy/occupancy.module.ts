@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
+import { AgentsModule } from '../agents/agents.module';
 import { DevicesModule } from '../devices/devices.module';
 import { StreamsModule } from '../streams/streams.module';
+import { CommandRevocationListener } from './command-revocation.listener';
 import { OccupancyExpiryMonitor } from './occupancy-expiry.monitor';
 import { StreamRevocationListener } from './stream-revocation.listener';
 
@@ -10,7 +12,7 @@ import { StreamRevocationListener } from './stream-revocation.listener';
  * CommandsModule과 같은 "양쪽을 import하는 조립 모듈" 패턴으로 회피
  */
 @Module({
-  imports: [DevicesModule, StreamsModule],
-  providers: [OccupancyExpiryMonitor, StreamRevocationListener],
+  imports: [AgentsModule, DevicesModule, StreamsModule],
+  providers: [OccupancyExpiryMonitor, StreamRevocationListener, CommandRevocationListener],
 })
 export class OccupancyModule {}
