@@ -16,3 +16,8 @@ mirror-helper/.build/
 android-controller/local.properties
 android-controller/.gradle/
 android-controller/**/build/
+
+# 로컬 에이전트 지침과 내부 작업 기록
+/AGENTS.md
+/CLAUDE.md
+/docs/development-log.md

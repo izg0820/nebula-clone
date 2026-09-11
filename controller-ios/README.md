@@ -1,21 +1,18 @@
 # Nebula iOS Controller
 
 XCUITest 러너가 "끝나지 않는 테스트" 안에서 HTTP 서버를 호스팅하는 기기 제어부 (WebDriverAgent 방식).
-**실기기 검증 완료 (2026-09-07)** — 탭·스와이프·입력·UI 덤프·스크린샷·홈 버튼 전 구간 실동작.
+탭·스와이프는 비공개 이벤트 합성 API를 우선 사용하고, 실패 시 XCUICoordinate로 폴백합니다.
+iOS·Xcode 업데이트 시 호환성 확인이 필요합니다.
+전체 스택 실행은 [루트 README](../README.md)를 참고하세요.
 
-탭·스와이프는 **저수준 이벤트 합성**(`EventSynthesizer` — XCSynthesizedEventRecord를
-XCTRunnerDaemonSession에 직접 주입, WDA 방식)을 우선 사용하고 실패 시 XCUICoordinate로 폴백.
-실측(2026-09-08, iOS 26.6.1): 서버 API 기준 탭 왕복 755ms → **301ms** (XCUI 경로의 접근성 스냅샷
-2회 + interruption 체크 + 후처리를 우회). 비공개 API 주의: completion 블록 시그니처는
-`(Bool, NSError?)` — `(NSError?)`로 받으면 BOOL 인자를 retain하다 SIGSEGV (크래시 리포트로 확정).
-
-## HTTP 계약 (Agent의 ControllerClient와 일치해야 함)
+## HTTP API
 
 | 경로 | 본문 | 응답 |
 |---|---|---|
 | `POST /health` | — | `{"status":"ok"}` |
 | `POST /tap` | `{x, y}` (pt, 0~10000) | `{"ok":true}` |
 | `POST /swipe` | `{fromX, fromY, toX, toY, durationMs}` | `{"ok":true}` |
+| `POST /press` | `{button:"home"}` | `{"ok":true}` |
 | `POST /type` | `{text}` (4000자 이하) | `{"ok":true}` |
 | `POST /ui` | `{bundleId?}` — 러너는 지원하나 **Agent/서버 미배선**: 현재 항상 스프링보드 트리 반환 | `{"ok":true, "tree":"..."}` |
 | `POST /screenshot` | — | `{"ok":true, "jpegBase64":"...", "widthPt":430, "heightPt":932}` |
@@ -26,7 +23,7 @@ XCTRunnerDaemonSession에 직접 주입, WDA 방식)을 우선 사용하고 실�
   Agent가 러너 env 주입과 요청 헤더를 함께 배선함 (러너에만 설정하면 헬스체크 401 → 재기동 루프)
 - 필드 검증 실패는 400, 미지원 경로는 404
 
-## 빌드·실행 (맥미니에서)
+## 단독 빌드·실행
 
 ```bash
 brew install xcodegen
@@ -55,15 +52,15 @@ xcodebuild test \
 ```bash
 brew install libimobiledevice
 iproxy 8100 8100 -u <UDID>    # 맥의 :8100 → 기기의 :8100
-# 실기기 스모크 1순위: main.sync 런루프 전제 검증 — 이게 응답해야 나머지가 의미 있음
+# 러너 상태 확인
 curl -s -X POST http://127.0.0.1:8100/health
 ```
 
 이 iproxy+curl 경로는 **러너 단독 스모크용**이다 (Agent 없이 러너만 검증). Agent 운영 경로는
 수퍼바이저(`NEBULA_XCODEBUILD_ENABLED=true`)가 러너·iproxy를 자동 기동하므로 수동 포워딩은 불필요하다.
 
-## 알려진 제약 (v0)
+## 제약
 
-- `typeText`는 키보드가 포커스된 상태에서만 동작 — WDA식 커스텀 IME 미구현 (한글은 되지만 방식이 다름, 미검증)
-- XCUI 액션 실패(좌표 밖 등)가 테스트 실패로 이어져 러너가 죽을 수 있음 — Agent 수퍼바이저의 자동 재기동으로 커버 예정
+- 텍스트 입력은 키보드 포커스가 필요하며, 한글 입력 호환성은 미검증
+- XCUI 액션 실패(좌표 밖 등)가 테스트 실패로 이어져 러너가 죽을 수 있음 — Agent 수퍼바이저가 종료를 감지하면 재기동
 - 무료 Apple ID 서명 시 7일마다 재서명 필요 (`-allowProvisioningUpdates`로 자동 갱신 시도, GUI 개입 없이 되는지 미검증)

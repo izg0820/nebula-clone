@@ -1,296 +1,196 @@
 # nebula-clone
 
-토스 디바이스 팜 **Nebula** 따라해보기 — **iOS + Android**
-(원문: [토스는 어떻게 수백 대의 기기를 하나의 테스트 인프라로 만들었을까](https://toss.tech/article/device-farm-nebula))
+iOS·Android 실기기를 웹 브라우저와 CLI에서 원격으로 조작하는 디바이스 팜 학습 프로젝트.
+토스의 [Nebula 소개 글](https://toss.tech/article/device-farm-nebula)에서 영감을 받은 독립 구현입니다.
 
-## 원문 요약 — Nebula가 푸는 문제
+## 주요 기능
 
-- 팀마다 Appium 세팅 + 기기 5~10대를 각자 운영 → 중복 작업, 자원 분산, 보안 관리 부담
-- 이를 **전사 공용 디바이스 팜**으로 중앙화: 웹 콘솔 / SDK / CLI 로 누구나 실기기 점유·조작
-- Appium을 버리고 **자체 드라이버** 개발: 세션리스(stateless HTTP) + 상시 pre-warm 컨트롤러로
-  클릭 52ms(Appium 702ms), 세션 시작 15~40초 오버헤드 제거
-- iOS 미러링이 최대 난제: USB 직결 캡처는 조작 세션과 충돌, Appium MJPEG는 10~15fps 슬라이드쇼.
-  macOS 내장 캡처 장치를 활용해 "보면서 동시에 조작" + 60~120fps 달성
+- **웹 콘솔**: 기기 목록, 점유·해제, H.264 실시간 미러링과 클릭 조작
+- **CLI·SDK**: 탭, 스와이프, 텍스트 입력, 홈 버튼, UI 덤프, 스크린샷
+- **상시 구동 컨트롤러**: 기기마다 러너를 미리 실행하고 세션 생성 없이 명령 처리
+- **Agent 자동화**: 기기 발견, 러너·미러링 프로세스 감시와 재기동
+- **점유 관리**: 한 기기를 한 사용자가 점유하고, 유휴 점유는 기본 10분 후 회수
 
-## 이 클론의 범위
+## 시작하기
 
-- **iOS + Android 구현** — iPhone 공기계 1대 + Android 1대(ZFold8). 둘 다 원문(토스) 방식으로
-  자체 개발 (scrcpy·Appium 등 미사용). Android 러너가 iOS와 동일 HTTP 계약이라 Agent 명령 경로 공용
-- **실제 구동이 목표** — 실기기에서 점유 → 조작 → 미러링까지 돌아가는 상태까지 간다
-  (달성 — iOS·Android 전 구간 실기기 검증 완료, 로드맵 참고)
-- **로컬 실행 전용** — 클라우드 배포는 범위에서 제외. 단 설계는 "서버가 공인망, Agent가 NAT 뒤"
-  토폴로지를 전제해 아웃바운드 터널 구조를 유지한다
+명령은 별도 안내가 없으면 저장소 루트에서 실행합니다.
 
-## 목표 아키텍처
+### 요구사항
 
-원문과 동일한 4계층 구조. 설계 토폴로지는 "오케스트레이션 = 클라우드(공인 IP), 호스트 = 집 맥미니"를
-전제해 명령 방향을 뒤집는다 — NAT 뒤의 Agent가 서버로 **아웃바운드 WS 터널**을 상시 유지하고,
-명령·미러링 스트림 모두 이 터널을 경유한다. (실행은 로컬 — 서버·Agent·웹을 같은 맥에서 구동)
+- macOS, Node.js 24 이상, pnpm
+- iOS: Xcode 전체 설치, XcodeGen, `iproxy`, 서명용 Apple ID
+- iPhone: 개발자 모드 활성화, Mac 신뢰, 러너 설치 중 잠금 해제. 미러링은 USB 연결 필요
+- Android(선택): JDK 17 이상, Android SDK, adb, USB 디버깅을 허용한 기기
+- 웹 콘솔: WebCodecs의 H.264 디코딩을 지원하는 브라우저
 
-```mermaid
-flowchart TB
-    subgraph client["① 클라이언트 계층"]
-        WEB["웹 콘솔<br/>(미러링 뷰 + 클릭 조작)"]
-        CLI["CLI / SDK<br/>(테스트 코드에서 호출)"]
-    end
+### 환경 설정
 
-    subgraph server["② 서버 계층 — 오케스트레이션 (공인망 배포 전제 설계)"]
-        API["NestJS REST API<br/>occupy / release / action 프록시<br/>+ 토큰 인증 (보안 기본값 닫힘)"]
-        REG["디바이스 레지스트리<br/>(상태·태그·점유 정보)"]
-        LOCK["점유 원자성<br/>(SQLite 트랜잭션 → 확장 시 Redis)"]
-    end
-
-    subgraph agent["③ 에이전트 계층 — 집 맥미니"]
-        AG["Agent 데몬 (plain TS)<br/>- devicectl 로 iPhone 자동 발견<br/>- 서버로 WS 터널·하트비트<br/>- 기기별 Controller·미러링 프로세스 관리(pre-warm)"]
-    end
-
-    subgraph device["④ 기기 계층 — iPhone (기기당 1세트 상시 구동)"]
-        CTRL["Controller 서버<br/>XCUITest 러너가 HTTP 서버 호스팅<br/>탭·입력·UI 덤프 (WDA 방식)"]
-        MIRROR["미러링 헬퍼 (맥미니에서 실행)<br/>macOS 캡처 장치 → H.264 → WS"]
-    end
-
-    WEB -->|"REST + WS"| API
-    CLI -->|REST| API
-    API --> REG
-    API --> LOCK
-    AG ==>|"아웃바운드 WS 터널 상시 유지<br/>(NAT 뒤 → 클라우드, 명령·스트림 모두 경유)"| API
-    AG -->|"xcodebuild 로 기동·감시"| CTRL
-    AG -->|"프로세스 기동·감시"| MIRROR
-```
-
-### 핵심 설계 결정
-
-| 항목 | 원문 (Nebula) | 이 클론 | 이유 |
-|---|---|---|---|
-| 플랫폼 | Android + iOS | **iOS + Android** | iPhone 공기계 1대 + ZFold8 |
-| 드라이버 | Appium 대체 자체 개발 | 동일 — iOS: XCUITest 러너 / Android: instrumentation 러너 (둘 다 동일 HTTP 계약) | 이 프로젝트의 학습 핵심 |
-| Android 미러링 | SurfaceControl + MediaCodec | 동일 — app_process(shell UID) 데몬, hidden `createVirtualDisplay` + MediaCodec H.264 (실측 50~65fps) | 원문 방식 자체 구현 |
-| 세션 모델 | 세션리스, 컨트롤러 상시 구동 | 동일 — XCUITest 러너 상시 구동 + stateless HTTP | 세션 오버헤드 제거 구조 체험 |
-| 테스트 큐 | Kafka + Runner 병렬 소비 | 생략 → 동기 REST만 | 규모상 불필요 (YAGNI) |
-| 점유 락 | 분산 락 | SQLite 트랜잭션 원자 점유 (`DevicesRepository` 인터페이스로 저장소 분리) | 서버 1대면 충분 |
-| 명령 방향 | 서버 → Agent (사내망) | Agent → 서버 아웃바운드 WS 터널 | 맥미니가 NAT 뒤라는 전제 유지 |
-| iOS 미러링 | macOS 내장 캡처 장치, 60~120fps | 동일 — CoreMediaIO 캡처 → VideoToolbox **H.264 단독** (실측 40~60fps) | 초기 JPEG 스크린샷 폴백(3.5fps)은 느려서 폐기 |
-| API 스펙 | OpenAPI → 코드 생성 (계약 우선) | 코드 우선 생성 → 클라이언트 자동 생성 | Nest 생태계(`@nestjs/swagger`)에 자연스러운 방향 |
-
-### 점유 → 조작 → 해제 흐름
-
-```mermaid
-sequenceDiagram
-    participant C as 클라이언트
-    participant S as 서버
-    participant A as Agent (맥미니)
-    participant D as Controller(iPhone)
-
-    A--)S: WS 터널 연결 + 기기 등록·하트비트 (상시)
-    C->>S: POST /devices/occupy {tags}
-    S->>S: 태그 필터 + 락 획득
-    S-->>C: 200 {deviceId, token}
-    C->>S: POST /devices/{id}/actions/tap {x, y}
-    S->>A: WS 터널로 명령 전달
-    A->>D: HTTP (상시 구동 중 — 세션 생성 없음)
-    D-->>C: 결과
-    C->>S: POST /devices/{id}/release
-    S->>S: 락 해제 + 기기 상태 리셋
-```
-
-## 기술 스택 (확정)
-
-- **서버**: **NestJS** — 레지스트리/점유/명령 프록시/미러링 릴레이를 모듈 경계로 대응.
-  점유 원자성은 SQLite 트랜잭션(better-sqlite3), 저장소 교체는 `DevicesRepository` 인터페이스,
-  하트비트 만료는 `@nestjs/schedule`(Cron), 터널·릴레이는 `@nestjs/websockets` 게이트웨이,
-  경계 검증은 class-validator. 공인망 노출 전제라 토큰 인증 필수(보안 기본값 닫힘)
-- **Agent**: 프레임워크 없는 **plain TypeScript 데몬** (맥미니) — `xcrun devicectl`로 기기 발견,
-  서버로 WS 터널 유지, `xcodebuild test-without-building`으로 Controller 기동·감시,
-  mirror-helper 프로세스 상시 구동(pre-warm)
-- **iOS Controller**: **Swift + XCUITest** — XCTest 러너 안에서 HTTP 서버를 호스팅하고
-  `XCUICoordinate.tap()` / `typeText()` / accessibility 스냅샷(UI 덤프)을 노출 (WebDriverAgent 구조 참고,
-  기능은 최소로 자체 구현)
-- **미러링 (H.264 단독)**: Swift 헬퍼(`mirror-helper`) — macOS가 USB 연결된 iPhone을 캡처 장치로
-  인식(CoreMediaIO — QuickTime 녹화와 같은 메커니즘) → AVFoundation 캡처 → VideoToolbox H.264 →
-  Agent가 터널로 바이너리 푸시 (실기기 검증 완료. 초기의 XCUITest 스크린샷 폴링 폴백은 폐기)
-- **웹 콘솔**: React + TypeScript + Vite, WebCodecs `VideoDecoder`로 H.264 디코딩 (실기기 검증 완료)
-- **저장소**: SQLite (레지스트리 + 점유 상태)
-- **SDK/CLI**: `@nebula/client` — OpenAPI 스펙(`packages/server/openapi.json`)에서
-  openapi-typescript로 타입만 생성 + 얇은 fetch 래퍼 (브라우저·Node 공용, 웹 콘솔도 이것을 소비).
-  `@nebula/cli` — 그 위에 구축한 `nebula` 커맨드 (의존성 없는 node:util parseArgs)
-- **Android Controller**: **Kotlin** — 제어는 커스텀 instrumentation APK(UiAutomation, 의존성 0,
-  iOS와 동일한 HTTP 계약을 자체 HTTP 서버로 노출), 미러링은 app_process(shell UID) 데몬
-  (hidden `DisplayManager.createVirtualDisplay` + MediaCodec H.264 → 자체 바이너리 프로토콜, 실기기 검증 완료)
-- **레포 구조**: pnpm workspace + Nx 모노레포 (`server` / `agent` / `shared` / `web` / `client` / `cli`) +
-  `controller-ios`(Swift/XcodeGen) + `android-controller`(Kotlin/Gradle) — 둘 다 workspace 밖
-
-## 실행 환경 요구사항
-
-- **맥 1대** — 서버·Agent·웹 콘솔·미러링 헬퍼 실행, Xcode 설치 (XCUITest 러너 빌드·기동에 필수)
-- **iPhone 공기계 1대** — 설정에서 **Developer Mode 활성화** (iOS 16+).
-  발견·조작은 Wi-Fi로도 동작하지만 **미러링 캡처 장치는 USB 연결 필수** (실측)
-- **Android 기기 1대 (선택)** — **USB 디버깅** 활성화. 조작·UI 덤프는 Wi-Fi로도 되지만
-  미러링 캡처는 USB 필수. adb + Android SDK(CLI만) 필요 — Android Studio 불필요
-- **코드 서명** — iOS: XCUITest 러너 설치에 서명 필요 (무료 Apple ID는 7일 재서명, 유료 계정은 1년).
-  Android: **디버그 키 자동, 만료 없음** (서명 지옥 없음)
-- Node.js 24+, pnpm. Android 빌드 시 JDK 17+ (자동 선택)
-
-## 실행 방법
-
-### 새 맥 온보딩 (최초 1회)
-
-`pnpm dev` 한 방이 되기 전에 스크립트가 대신 못 해주는 단계들. 순서대로:
+저장소를 클론한 뒤 의존성과 설정 파일을 준비합니다.
 
 ```bash
-# 1) 도구 — Xcode는 App Store에서 전체 설치 (CLT만으로는 xcodebuild·devicectl 불가)
-brew install xcodegen libimobiledevice   # xcodegen: 프로젝트 생성 / libimobiledevice: iproxy
-# Node 24+, pnpm 준비
-
-# 2) 의존성
-git clone <repo> && cd nebula-clone && pnpm install
-
-# 3) 설정 파일 3개 (전부 gitignore — 커밋 안 됨)
-cp packages/server/.env.example packages/server/.env   # 토큰 2개 생성: openssl rand -hex 32 (서로 다르게)
-cp packages/agent/.env.example packages/agent/.env     # 서버 주소 + 같은 Agent 토큰
-cp controller-ios/local.yml.example controller-ios/local.yml   # 본인 Apple Team ID 기입
-
-# 4) Apple 서명 최초 1회 (GUI 필요)
-cd controller-ios && xcodegen generate && open NebulaController.xcodeproj
-#   → Signing에서 Personal Team 지정. 첫 xcodebuild 때 키체인 프롬프트는 반드시 "항상 허용"
-#     ("허용"만 누르면 비대화형 셸에서 errSecInternalComponent로 계속 실패)
+pnpm install
+cp packages/server/.env.example packages/server/.env
+cp packages/agent/.env.example packages/agent/.env
 ```
 
-기기(iPhone) 쪽: 설정에서 **개발자 모드** 활성화(iOS 16+), 맥 **신뢰**, 러너 설치 동안 **잠금 해제**
-상태 유지. 미러링은 **USB 연결 필수**이고, macOS 26에서는 최초 1회 QuickTime의 동영상 녹화
-소스 목록을 열어 캡처 장치 발행을 트리거해야 할 수 있다 (mirror-helper/README.md).
+`openssl rand -hex 32`를 두 번 실행해 서로 다른 토큰을 생성하고 다음 값을 설정합니다.
 
-#### Android (adb만 있으면 자동 활성)
+| 파일 | 설정 | 값 |
+|---|---|---|
+| `packages/server/.env` | `NEBULA_CLIENT_TOKEN` | 웹·CLI용 토큰 |
+| `packages/server/.env` | `NEBULA_AGENT_TOKEN` | Agent용 토큰 |
+| `packages/agent/.env` | `NEBULA_AGENT_TOKEN` | 서버의 Agent 토큰과 동일한 값 |
+| `packages/agent/.env` | `NEBULA_SERVER_URL` | 기본 `ws://localhost:3000/agent` |
+
+토큰은 각각 24자 이상이어야 합니다. 예제의 `change-me` 값은 기동 시 거부됩니다.
+추가 설정은 [서버 환경 변수](./packages/server/.env.example)와
+[Agent 환경 변수](./packages/agent/.env.example)를 참고하세요.
+
+### 기기 없이 실행
 
 ```bash
-# 도구 — adb + Android SDK (Android Studio 불필요, 전부 CLI)
+pnpm dev --fake
+```
+
+정적 기기로 목록·점유·해제를 확인할 수 있습니다. 실제 기기 조작과 미러링은 제공하지 않습니다.
+
+### iOS 연결
+
+```bash
+brew install xcodegen libimobiledevice
+cp controller-ios/local.yml.example controller-ios/local.yml
+```
+
+`controller-ios/local.yml`에 본인의 Apple Team ID를 입력한 뒤 프로젝트를 생성합니다.
+
+```bash
+cd controller-ios
+xcodegen generate
+open NebulaController.xcodeproj
+cd ..
+```
+
+Xcode의 Signing에서 팀을 확인합니다. 최초 서명 시 키체인 접근을 허용해야 비대화형 실행이
+가능합니다. 자세한 수동 실행과 문제 해결은 [iOS Controller 안내](./controller-ios/README.md)를 참고하세요.
+
+```bash
+pnpm dev
+```
+
+### Android 연결
+
+```bash
 brew install --cask android-platform-tools android-commandlinetools
-sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"   # licenses 동의
-cp android-controller/local.properties.example android-controller/local.properties  # sdk.dir 확인
-bash scripts/build-android.sh    # 러너 APK + 미러 dex 빌드 (JDK 17+ 자동 선택, dev.sh도 자동 빌드)
+sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+cp android-controller/local.properties.example android-controller/local.properties
 ```
 
-adb가 설치돼 있으면 Android는 **켜는 설정 없이 자동 활성** (발견·제어·미러링). 러너 APK·미러 dex·
-adb 경로는 전부 자동 계산된다 — env 지정 불필요.
-
-기기(Android) 쪽: **개발자 옵션 → USB 디버깅** 활성화, 최초 연결 시 "이 컴퓨터 허용" 다이얼로그
-**허용**, Samsung은 **Auto Blocker OFF**. 조작·UI 덤프는 Wi-Fi로도 되지만 **미러링 캡처는 USB 필수**.
-새 기기는 `bash scripts/android-probe.sh`로 hidden API 지원(U1/U2)을 먼저 확인
-(android-controller/README.md '지원 기기'). **서명 지옥 없음** — 디버그 키 자동, 7일 만료 없음.
-
-이후는 아래 `pnpm dev`만 — 빠진 도구·설정은 스크립트가 검사해서 안내한다 (iOS·Android 모두).
-
-### 한 번에 실행 (개발 세션)
+SDK 라이선스에 동의하고 `local.properties`의 `sdk.dir`를 설치 경로로 수정합니다.
 
 ```bash
-pnpm dev           # 빌드 → 서버 → Agent → 웹 콘솔, 로그는 한 화면 (= scripts/dev.sh)
-pnpm dev -- --fake # 기기 없이 — 정적 가짜 기기로 서버·웹 파이프라인만
+bash scripts/build-android.sh
+pnpm dev
 ```
 
-- 종료는 Ctrl-C 한 번 (Agent가 러너·iproxy·헬퍼까지 정리)
-- **재실행하면 기존 스택을 자동 종료하고 새로 시작**한다
-- 수퍼바이저·미러링 설정이 .env에 없으면 저장소 기준 기본값을 자동 주입하고,
-  mirror-helper 미빌드 시 빌드를 시도한다 (실패해도 미러링만 빠진 채 진행)
+adb가 있으면 Android 발견·제어·미러링이 자동 활성화됩니다. Android만 사용할 때는
+`packages/agent/.env`에 `NEBULA_XCODEBUILD_ENABLED=false`를 설정해 iOS 도구 검사를 생략합니다.
+지원 범위와 연결 진단은 [Android 안내](./android-controller/README.md)를 참고하세요.
 
-### 상시 데몬으로 실행 (launchd 자동 복구)
+### 웹 콘솔 접속
 
-로그인 시 자동 기동 + 크래시 시 자동 재기동이 필요하면 launchd LaunchAgent로 설치한다.
+`http://localhost:5173`을 열고 설정 패널에 서버 주소(기본 `http://localhost:3000`)와
+`NEBULA_CLIENT_TOKEN`을 입력한 뒤 **연결**을 누릅니다. 기기를 점유하면 조작할 수 있습니다.
+
+`Ctrl-C`로 개발 스택을 종료합니다. 로그는 `.dev-logs/`에 저장되며,
+`pnpm dev`를 다시 실행하면 기존 개발 스택을 종료하고 시작합니다.
+
+## CLI
 
 ```bash
-scripts/daemon.sh install    # 빌드 → plist 설치(~/Library/LaunchAgents) → 기동
-scripts/daemon.sh status     # pid·마지막 종료 코드
+export NEBULA_SERVER_URL=http://localhost:3000
+export NEBULA_CLIENT_TOKEN='발급한 클라이언트 토큰'
+
+pnpm cli devices list
+pnpm cli devices occupy --platform ios
+pnpm cli tap --x 200 --y 400
+pnpm cli screenshot --out shot.jpg
+pnpm cli devices release
+```
+
+점유 정보는 로컬 `~/.nebula/session.json`에 저장되어 다음 명령에서 재사용됩니다.
+전체 명령과 종료 코드는 [CLI 안내](./packages/cli/README.md)를 참고하세요.
+
+## 구조
+
+```mermaid
+flowchart LR
+    WEB["웹 콘솔 / CLI / SDK"] -->|REST| SERVER["서버 · NestJS<br/>인증 / 점유 / 명령 프록시 / 스트림 릴레이"]
+    AGENT["Agent · TypeScript<br/>기기 발견 / 프로세스 관리"] -->|"아웃바운드 WS 터널"| SERVER
+    AGENT -->|"명령 전달"| IOS["iOS · XCUITest"]
+    AGENT -->|"명령 전달"| ANDROID["Android · Instrumentation"]
+    IOS -.->|"H.264 캡처"| AGENT
+    ANDROID -.->|"H.264 스트림"| AGENT
+    SERVER -.->|"WS 미러링"| WEB
+```
+
+Agent가 서버로 연결한 WebSocket 터널을 통해 명령과 미러링 데이터를 전달합니다.
+서버가 NAT 뒤의 Agent로 직접 접속할 필요가 없습니다. iOS와 Android 컨트롤러는
+동일한 HTTP 계약을 사용하며, 클라이언트 요청의 결과는 Agent와 서버를 거쳐 반환됩니다.
+
+| 경로 | 역할 |
+|---|---|
+| `packages/server` | NestJS API, SQLite 기기·점유 저장소, WS 터널·릴레이 |
+| `packages/agent` | Mac에서 기기 발견, 컨트롤러와 미러링 프로세스 관리 |
+| `packages/web` | React 웹 콘솔, WebCodecs H.264 디코딩 |
+| `packages/client` | OpenAPI 생성 타입과 fetch 기반 SDK |
+| `packages/cli` | SDK를 사용하는 CLI |
+| `packages/shared` | 공용 프로토콜·타입·프레임 코덱 |
+| `controller-ios` | Swift/XCUITest 기기 제어 러너 |
+| `mirror-helper` | macOS 캡처 장치와 VideoToolbox를 이용한 iOS 미러링 |
+| `android-controller` | Kotlin 제어 러너와 MediaCodec 미러링 데몬 |
+
+점유 TTL은 점유·명령·keepalive 요청으로 갱신됩니다. Agent 하트비트와 미러링 시청은
+갱신하지 않습니다. 웹 keepalive도 사용자 입력이 30분 동안 없으면 중단됩니다.
+미러링은 현재 점유자만 시청할 수 있습니다.
+
+## 개발 명령
+
+| 명령 | 설명 |
+|---|---|
+| `pnpm build` | 워크스페이스 패키지 빌드 |
+| `pnpm test` | 워크스페이스 테스트 |
+| `pnpm affected` | 변경 영향이 있는 패키지 빌드·테스트 |
+| `pnpm graph` | 패키지 의존성 그래프 |
+| `pnpm openapi` | 서버 OpenAPI와 클라이언트 타입 재생성 |
+
+서버 API 변경 후에는 `pnpm openapi`로 생성물을 갱신합니다.
+[OpenAPI 스펙](./packages/server/openapi.json)은 저장소에 포함됩니다.
+서버의 `ENABLE_DOCS=true` 설정으로 `/docs`의 Swagger UI를 열 수 있습니다.
+Swagger는 인증 없이 공개되므로 기본값은 `false`입니다. `/health`는 공개 상태 확인 경로이며,
+기기 API에는 클라이언트 토큰이 필요합니다.
+
+## 상시 실행
+
+macOS LaunchAgent로 서버와 Agent를 로그인 시 자동 실행할 수 있습니다.
+웹 개발 서버는 포함되지 않으며, `pnpm dev`와 동시에 사용할 수 없습니다.
+
+```bash
+scripts/daemon.sh install
+scripts/daemon.sh status
 scripts/daemon.sh restart
 scripts/daemon.sh uninstall
 ```
 
-- 서버·Agent 프로세스가 죽으면 launchd가 10초 간격(ThrottleInterval)으로 되살린다
-- `dev.sh`(개발 세션)와 동시 사용 불가 — dev.sh가 감지하고 거부함
-- 로그: `.dev-logs/daemon-{server,agent}.log` (로테이션 없음 — 백로그)
+설치 전 환경 설정과 네이티브 빌드를 완료해야 합니다. launchd 설치 환경의 장기 구동은 미검증입니다.
 
-### CLI
+## 지원 범위와 제약
 
-```bash
-export NEBULA_SERVER_URL=http://localhost:3000
-export NEBULA_CLIENT_TOKEN=<서버 .env의 NEBULA_CLIENT_TOKEN>
-
-pnpm cli devices list
-pnpm cli devices occupy --platform ios     # 점유 — 세션이 ~/.nebula/session.json에 저장됨
-pnpm cli tap --x 200 --y 400               # 이후 커맨드는 기기·occupantId 생략 가능
-pnpm cli screenshot --out shot.jpg
-pnpm cli devices keepalive                 # 명령 없이 오래 점유할 때 (sliding TTL 연장)
-pnpm cli devices release
-```
-
-전체 커맨드·플래그·종료 코드는 [packages/cli/README.md](./packages/cli/README.md) 참고.
-
-### OpenAPI 스펙과 클라이언트 생성
-
-- 스펙은 코드 우선: 서버 데코레이터 → `packages/server/openapi.json`(커밋 산출물) →
-  `@nebula/client`의 생성 타입(`src/generated/api-schema.ts`, 커밋 산출물)
-- **서버 API를 바꾸면 `pnpm openapi`로 재생성**해야 한다 — 안 하면 서버·client의
-  드리프트 테스트가 실패한다 (생성물은 손으로 고치지 말 것)
-- `ENABLE_DOCS=true`면 같은 문서가 `/docs`(Swagger UI)로도 노출된다
-
-### 개별 실행
-
-```bash
-pnpm install
-
-# 1) 서버
-cd packages/server
-cp .env.example .env   # 토큰 교체 필수 — openssl rand -hex 32 (24자 미만·플레이스홀더면 기동 실패)
-pnpm build && pnpm start        # 개발 모드: pnpm start:dev
-
-# 2) 미러링 헬퍼 (선택 — 미설정 시 미러링만 비활성, 조작은 동작)
-cd mirror-helper && swift build
-
-# 3) Agent
-cd packages/agent
-cp .env.example .env   # 서버 주소·토큰 + NEBULA_XCODEBUILD_ENABLED + NEBULA_MIRROR_HELPER
-pnpm build && pnpm start
-
-# 4) 웹 콘솔
-cd packages/web && pnpm start:dev   # 설정 패널에 서버 주소·클라이언트 토큰 입력
-
-# 테스트: 루트에서 pnpm test (Nx 캐시 적용)
-```
-
-- REST 문서: `http://localhost:3000/docs` (Swagger) — 무인증 노출이라 `ENABLE_DOCS=true`일 때만 활성 (기본 꺼짐)
-- 클라이언트 인증: `Authorization: Bearer $NEBULA_CLIENT_TOKEN`
-- Agent WS 터널: `ws://host:3000/agent?agentId=<id>&token=$NEBULA_AGENT_TOKEN`
-
-## 로드맵
-
-- [x] **Phase 1 — 뼈대**: NestJS 서버(occupy/release/레지스트리/토큰 인증) + Agent(devicectl 기기 발견,
-      WS 터널, 하트비트) — 로컬 e2e 구동 확인 (실기기 발견은 Phase 2에서 검증 완료,
-      클라우드 배포는 로컬 전용으로 확정하며 범위 제외)
-- [x] **Phase 2 — 제어**: 명령 파이프라인 전 구간 **실기기 검증 완료** (2026-09-07, iPhone/iOS 26.6.1) —
-      devicectl 자동 발견 → 점유 → 서버 API 탭·스와이프·UI 덤프가 USB(iproxy) 경유로 실제 동작.
-      XCUITest 러너의 main.sync 런루프 전제, hardwareProperties.platform 필드 파싱도 실측 확정
-- [x] **Phase 2.5 — 운영 자동화**: Controller 수퍼바이저 실기기 검증 완료 (2026-09-07) —
-      `NEBULA_XCODEBUILD_ENABLED=true`면 Agent가 기기별 러너·iproxy를 자동 기동, 10초 헬스 폴링,
-      죽으면 백오프 재기동(강제 kill → 2초 후 복구 실측). 준비된 기기는 `controller-ready` 태그로
-      점유 필터 가능. 남은 것: 7일 재서명 자동화 검증(시간 경과 필요)
-- [x] **Phase 3 — 미러링 (H.264, 원문 방식)**: 실기기 검증 완료 (2026-09-07) — **40fps, 8KB/frame,
-      1290×2796**. macOS 캡처 장치(CoreMediaIO) → VideoToolbox H.264(`mirror-helper`) → Agent가
-      터널로 바이너리 푸시 → 서버 릴레이(`/stream` WS) → 브라우저 WebCodecs 디코딩.
-      H.264 단독 상시 구동(pre-warm) — 초기의 JPEG 스크린샷 폴백(3.5fps)은 느려서 제거.
-      macOS 26 함정 2개(DiscoverySession 미노출 → CMIO UID 직접 열기, 최초 발행 트리거)는
-      mirror-helper/README.md 참고 — 콜드 스타트 자가 발행은 미검증
-- [x] **Phase 4 — 확장** (2026-09-08):
-      ① **점유 만료(sliding TTL)** — 활동(점유·명령·keepalive) 기준 10분 TTL, 30초 스윕이 회수.
-      기기는 online 유지(즉시 재점유 가능), 만료 시 스트림 시청자는 4408로 종료. 웹은 30초 keepalive 자동
-      ② **CLI/SDK** — openapi.json(코드 우선 생성) → openapi-typescript 타입 → `@nebula/client`
-      (웹 콘솔도 소비) → `nebula` CLI (점유 세션 파일, 종료 코드 규약)
-      ③ **프로세스 자동 복구** — launchd LaunchAgent(`scripts/daemon.sh`)로 서버·Agent 상시화
-      (자식 프로세스 복구는 Phase 2.5에서 완료). launchd 실설치 검증은 미실시
-- [x] **Phase 5 — Android (전부 자체 개발)**: 실기기 검증 완료 (2026-09-10, ZFold8/Android 17) —
-      제어는 커스텀 instrumentation APK(ADB+UiAutomation, iOS와 동일 HTTP 계약이라 Agent 명령 경로 무변경),
-      미러링은 app_process 데몬(hidden `createVirtualDisplay` + MediaCodec H.264 → 자체 프로토콜).
-      **실측: 탭 p50 31.9ms(원문 59ms·iOS 301ms 대비), 미러링 50~65fps, 한글 입력 IME 없이 동작,
-      접힘↔펼침 해상도 전환 자동 재구성**. hidden API 지원은 보유 기기 조합만
-      (android-controller/README '지원 기기'). 타이밍·튜닝 23개는 `NEBULA_ANDROID_*` env로 조정
-
-## 원문 대비 의도적 생략
-
-Kafka 파이프라인, 다중 Runner, 무중단 배포, 보안·컴플라이언스 정책, AppCenter 연동,
-AI 에이전트 — 학습 범위 밖이거나 규모상 불필요. 구조만 원문을 따르고 구현은 최소로 유지한다.
+- 실기기 확인 범위는 iPhone 14 Pro Max(iOS 26.6.1), ZFold8(Android 17)입니다.
+  다른 기기·OS 조합은 미검증입니다.
+- iOS 이벤트 합성과 Android 미러링은 비공개 API를 사용해 OS 업데이트에 영향을 받을 수 있습니다.
+- 무료 Apple ID의 iOS 프로비저닝은 7일 후 만료됩니다. 무인 자동 갱신은 미검증입니다.
+- macOS 26에서 iOS 캡처 장치가 보이지 않으면 QuickTime의 동영상 녹화 소스 목록을 열어야 할 수 있습니다.
+  재연결·재부팅 후 자동 인식은 미검증입니다. [미러링 안내](./mirror-helper/README.md)를 참고하세요.
+- Android의 `FLAG_SECURE` 화면은 미러링할 수 없습니다.
+- Android에서 다른 UiAutomation 기반 도구와 동시에 제어할 수 없습니다.
+- 단일 서버·소규모 기기 운영을 위한 학습 구현입니다. 분산 테스트 큐와 다중 서버 운영은 포함하지 않습니다.
