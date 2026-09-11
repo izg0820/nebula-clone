@@ -20,7 +20,8 @@ iOS·Android 실기기를 웹 브라우저와 CLI에서 원격으로 조작하�
 - macOS, Node.js 24 이상, pnpm
 - iOS: Xcode 전체 설치, XcodeGen, `iproxy`, 서명용 Apple ID
 - iPhone: 개발자 모드 활성화, Mac 신뢰, 러너 설치 중 잠금 해제. 미러링은 USB 연결 필요
-- Android(선택): JDK 17 이상, Android SDK, adb, USB 디버깅을 허용한 기기
+- Android: JDK 17 이상, Android SDK, adb
+- Android 기기: USB 디버깅 활성화, Mac 연결 허용
 - 웹 콘솔: WebCodecs의 H.264 디코딩을 지원하는 브라우저
 
 ### 환경 설정
@@ -92,8 +93,9 @@ bash scripts/build-android.sh
 pnpm dev
 ```
 
-adb가 있으면 Android 발견·제어·미러링이 자동 활성화됩니다. Android만 사용할 때는
-`packages/agent/.env`에 `NEBULA_XCODEBUILD_ENABLED=false`를 설정해 iOS 도구 검사를 생략합니다.
+Android 기기를 연결하면 Agent가 발견·제어·미러링을 자동으로 활성화합니다. iOS 없이
+Android만 운영할 때는 `packages/agent/.env`에 `NEBULA_XCODEBUILD_ENABLED=false`를 설정해
+iOS 도구 검사를 생략합니다.
 지원 범위와 연결 진단은 [Android 안내](./android-controller/README.md)를 참고하세요.
 
 ### 웹 콘솔 접속
