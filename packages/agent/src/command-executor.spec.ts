@@ -2,15 +2,23 @@ import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { CommandMessage } from '@nebula/shared';
 import { CommandExecutor } from './command-executor';
-import { ControllerEndpointResolver, StaticControllerRegistry } from './controller-registry';
+import { ControllerEndpointResolver } from './controller-registry';
 
 function tapCommand(deviceId: string, requestId: string): CommandMessage {
   return { type: 'command', requestId, deviceId, action: { kind: 'tap', x: 1, y: 2 } };
 }
 
+/** deviceId → 포트 매핑을 준비 완료 상태의 resolver로 (테스트용 고정 Controller 주소) */
+function resolverFor(ports: Record<string, number>): ControllerEndpointResolver {
+  return {
+    resolve: (deviceId) => (deviceId in ports ? `http://127.0.0.1:${ports[deviceId]}` : null),
+    isReady: (deviceId) => deviceId in ports,
+  };
+}
+
 describe('CommandExecutor', () => {
   test('Controller 미등록 기기는 실패 outcome (throw 금지)', async () => {
-    const executor = new CommandExecutor(new StaticControllerRegistry(new Map()));
+    const executor = new CommandExecutor(resolverFor({}));
 
     const outcome = await executor.execute(tapCommand('unknown', 'r1'));
 
@@ -60,7 +68,7 @@ describe('CommandExecutor', () => {
     });
 
     test('같은 기기의 명령은 동시에 나가지 않음', async () => {
-      const executor = new CommandExecutor(new StaticControllerRegistry(new Map([['u1', port]])));
+      const executor = new CommandExecutor(resolverFor({ u1: port }));
 
       const outcomes = await Promise.all([
         executor.execute(tapCommand('u1', 'r1')),

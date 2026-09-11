@@ -38,10 +38,9 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       agentId: 'test-agent',
       discoveryIntervalMs: 60_000,
       heartbeatIntervalMs: 60_000,
-      controllerPorts: new Map<string, number>(),
       staticDevices: [],
       supervisor: null,
-      mirrorHelperPath: null,
+      mirrorHelperPath: '/fake/mirror-helper',
       controllerToken: null,
       android: null,
     };

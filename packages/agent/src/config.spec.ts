@@ -1,4 +1,4 @@
-import { loadConfig, parseControllerPorts, parseStaticDevices, sanitizeAgentId } from './config';
+import { loadConfig, parseStaticDevices, sanitizeAgentId } from './config';
 
 describe('loadConfig', () => {
   const VALID_ENV = {
@@ -59,32 +59,20 @@ describe('loadConfig', () => {
     ).toThrow(/플레이스홀더/);
   });
 
-  test('미러링 헬퍼 경로가 존재하지 않으면 기동 거부', () => {
+  test('명시한 미러링 헬퍼 경로가 존재하지 않으면 기동 거부 (오타 방지)', () => {
     expect(() =>
       loadConfig({ ...VALID_ENV, NEBULA_MIRROR_HELPER: '/없는/경로/mirror-helper' }),
     ).toThrow(/NEBULA_MIRROR_HELPER/);
   });
 
-  test('미러링 헬퍼 경로가 실행 가능하면 통과', () => {
+  test('명시한 미러링 헬퍼 경로가 실행 가능하면 통과', () => {
     const config = loadConfig({ ...VALID_ENV, NEBULA_MIRROR_HELPER: '/bin/ls' });
     expect(config.mirrorHelperPath).toBe('/bin/ls');
   });
-});
 
-describe('parseControllerPorts', () => {
-  test('udid:port 쌍 파싱, 미지정 시 빈 맵', () => {
-    const ports = parseControllerPorts('udid-1:8100, udid-2:8101');
-    expect(ports.get('udid-1')).toBe(8100);
-    expect(ports.get('udid-2')).toBe(8101);
-    expect(parseControllerPorts(undefined).size).toBe(0);
-  });
-
-  test('형식 오류·범위 밖 포트는 즉시 실패', () => {
-    expect(() => parseControllerPorts('udid-1')).toThrow(/형식 오류/);
-    expect(() => parseControllerPorts('udid-1:0')).toThrow(/형식 오류/);
-    expect(() => parseControllerPorts('udid-1:70000')).toThrow(/형식 오류/);
-    // 초과 세그먼트도 오타로 보고 거부 (조용한 무시 금지)
-    expect(() => parseControllerPorts('udid-1:8100:extra')).toThrow(/형식 오류/);
+  test('미러링 헬퍼 미지정 시 레포 빌드 산출물 기본 경로 (미러링 항상 시도)', () => {
+    const config = loadConfig(VALID_ENV);
+    expect(config.mirrorHelperPath).toMatch(/mirror-helper\/\.build\/debug\/mirror-helper$/);
   });
 });
 

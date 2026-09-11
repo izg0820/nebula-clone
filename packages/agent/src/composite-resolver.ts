@@ -1,6 +1,6 @@
 import { ControllerEndpointResolver } from './controller-registry';
 
-/** 여러 resolver 합성 — 기기를 소유한 첫 resolver가 담당 (iOS·Android·정적 포트) */
+/** 여러 resolver 합성 — 기기를 소유한 첫 resolver가 담당 (iOS·Android 수퍼바이저) */
 export class CompositeResolver implements ControllerEndpointResolver {
   constructor(private readonly resolvers: readonly ControllerEndpointResolver[]) {}
 

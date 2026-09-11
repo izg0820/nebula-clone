@@ -59,7 +59,8 @@ iproxy 8100 8100 -u <UDID>    # 맥의 :8100 → 기기의 :8100
 curl -s -X POST http://127.0.0.1:8100/health
 ```
 
-Agent의 `NEBULA_CONTROLLER_PORTS='<UDID>:8100'` 은 이 포워딩된 맥 로컬 포트를 가리킨다.
+이 iproxy+curl 경로는 **러너 단독 스모크용**이다 (Agent 없이 러너만 검증). Agent 운영 경로는
+수퍼바이저(`NEBULA_XCODEBUILD_ENABLED=true`)가 러너·iproxy를 자동 기동하므로 수동 포워딩은 불필요하다.
 
 ## 알려진 제약 (v0)
 

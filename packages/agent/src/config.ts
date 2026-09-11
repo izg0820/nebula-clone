@@ -1,7 +1,20 @@
 import { accessSync, constants } from 'fs';
 import { homedir, hostname } from 'os';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { DevicePlatform, isDevicePlatform, RegisterDeviceInput } from '@nebula/shared';
+
+// 산출물 기본 경로 — Agent는 항상 레포 안에서 실행됨(dev.sh·daemon.sh·launchd) 전제.
+// dist(빌드)·src(ts-node) 둘 다 packages/agent 하위라 3단계 상위가 레포 루트
+const REPO_ROOT = resolve(__dirname, '..', '..', '..');
+const DEFAULT_RUNNER_APK = join(
+  REPO_ROOT,
+  'android-controller/runner/build/outputs/apk/debug/runner-debug.apk',
+);
+const DEFAULT_MIRROR_DEX = join(
+  REPO_ROOT,
+  'android-controller/mirror/build/outputs/apk/debug/mirror-debug.apk',
+);
+const DEFAULT_MIRROR_HELPER = join(REPO_ROOT, 'mirror-helper/.build/debug/mirror-helper');
 
 /** Agent 설정 */
 export interface AgentConfig {
@@ -12,30 +25,28 @@ export interface AgentConfig {
   readonly agentId: string;
   readonly discoveryIntervalMs: number;
   readonly heartbeatIntervalMs: number;
-  /** 기기 UDID → Controller HTTP 포트 (정적 설정 — 러너 수동 기동 모드) */
-  readonly controllerPorts: ReadonlyMap<string, number>;
   /** devicectl 없이 등록할 정적 기기 목록 (개발·파이프라인 검증용) */
   readonly staticDevices: readonly RegisterDeviceInput[];
-  /** xcodebuild 수퍼바이저 설정 (null이면 정적 포트 모드) */
+  /** xcodebuild 수퍼바이저 설정 (null이면 iOS 제어 비활성) */
   readonly supervisor: SupervisorEnvConfig | null;
-  /** mirror-helper 바이너리 경로 — 미지정 시 미러링 비활성 (H.264 단일 방식) */
-  readonly mirrorHelperPath: string | null;
+  /** mirror-helper 바이너리 경로 — 미지정 시 레포 빌드 산출물 기본값 (미러링 항상 시도) */
+  readonly mirrorHelperPath: string;
   /** Controller HTTP 토큰 — 러너(TEST_RUNNER_...)와 클라이언트 헤더에 함께 배선 */
   readonly controllerToken: string | null;
-  /** Android(adb) 설정 — null이면 Android 전 기능 비활성 */
+  /** Android 설정 — adb 미설치 시에만 null (설치돼 있으면 항상 활성) */
   readonly android: AndroidEnvConfig | null;
 }
 
-/** Android 환경 설정 (NEBULA_ADB_ENABLED=true일 때만 로드) */
+/** Android 환경 설정 (adb 설치돼 있으면 로드, 없으면 null) */
 export interface AndroidEnvConfig {
   readonly adbPath: string;
-  /** 러너 APK 경로 — 미지정 시 발견만 되고 제어 비활성 (mirror-helper와 동일 패턴) */
-  readonly runnerApkPath: string | null;
+  /** 러너 APK 경로 — 미지정 시 레포 빌드 산출물 기본값 (제어 항상 활성) */
+  readonly runnerApkPath: string;
   /** 맥 로컬 포워딩 포트 시작값 (iOS 8200과 분리) */
   readonly basePort: number;
   readonly logDir: string;
-  /** 미러링 데몬 dex(apk) 경로 — 미지정 시 Android 미러링 비활성 */
-  readonly mirrorDexPath: string | null;
+  /** 미러링 데몬 dex(apk) 경로 — 미지정 시 레포 빌드 산출물 기본값 (미러링 항상 활성) */
+  readonly mirrorDexPath: string;
   /** 미러링 포워딩 포트 시작값 (러너 basePort와 분리 — 기본 8400) */
   readonly mirrorBasePort: number;
   /** 러너 수퍼바이저 타이밍 (전부 env 조정 가능) */
@@ -111,24 +122,6 @@ export function sanitizeAgentId(raw: string): string {
   const sanitized = raw.replace(/[^A-Za-z0-9_-]/g, '-').slice(0, 64);
   if (sanitized.length === 0) return 'agent';
   return sanitized;
-}
-
-/** 'udid:8100,udid2:8101' → Map. 형식 오류 시 즉시 실패 */
-export function parseControllerPorts(raw: string | undefined): ReadonlyMap<string, number> {
-  const ports = new Map<string, number>();
-  if (!raw || raw.trim().length === 0) return ports;
-
-  for (const pair of raw.split(',')) {
-    const parts = pair.split(':').map((part) => part.trim());
-    const [deviceId, portText] = parts;
-    const port = Number(portText);
-    // 초과 세그먼트(udid:8100:x)도 오타로 보고 거부 — 조용한 무시 금지
-    if (parts.length !== 2 || !deviceId || !Number.isInteger(port) || port <= 0 || port > 65_535) {
-      throw new Error(`NEBULA_CONTROLLER_PORTS 형식 오류: "${pair}" (udid:port,udid2:port)`);
-    }
-    ports.set(deviceId, port);
-  }
-  return ports;
 }
 
 /** 정적 기기 JSON 파싱 — 형식 오류 시 즉시 실패 (개발·검증용 입력이므로 관대하지 않음) */
@@ -231,15 +224,19 @@ function parsePositiveInt(
   return parsed;
 }
 
-/** 지정 시 존재·실행 권한을 기동 시점에 확인 — 경로 오타가 무한 spawn 재시도로만 드러나지 않게 */
-function parseMirrorHelperPath(raw: string | undefined): string | null {
-  if (!raw || raw.trim().length === 0) return null;
+/**
+ * mirror-helper 경로 — 명시 override 우선(오타면 즉시 실패), 미지정 시 레포 빌드 기본값.
+ * 기본값은 존재 검증 안 함 — 빌드 전이거나 macOS 버전 제약일 수 있고, 런타임 spawn이 실패를 드러냄
+ */
+function parseMirrorHelperPath(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_MIRROR_HELPER;
   try {
-    accessSync(raw, constants.X_OK);
+    accessSync(trimmed, constants.X_OK);
   } catch {
-    throw new Error(`NEBULA_MIRROR_HELPER 경로가 없거나 실행 권한 없음: ${raw}`);
+    throw new Error(`NEBULA_MIRROR_HELPER 경로가 없거나 실행 권한 없음: ${trimmed}`);
   }
-  return raw;
+  return trimmed;
 }
 
 /** 환경 변수 → 설정 로드. 누락·형식 오류 시 즉시 실패 */
@@ -279,7 +276,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
       DEFAULT_HEARTBEAT_INTERVAL_MS,
       MIN_INTERVAL_MS,
     ),
-    controllerPorts: parseControllerPorts(env.NEBULA_CONTROLLER_PORTS),
     staticDevices: parseStaticDevices(env.NEBULA_STATIC_DEVICES),
     supervisor: parseSupervisorConfig(env),
     mirrorHelperPath: parseMirrorHelperPath(env.NEBULA_MIRROR_HELPER),
@@ -291,18 +287,47 @@ export function loadConfig(env: NodeJS.ProcessEnv): AgentConfig {
 const DEFAULT_ANDROID_BASE_PORT = 8300;
 const DEFAULT_ANDROID_MIRROR_BASE_PORT = 8400;
 
-/** NEBULA_ADB_ENABLED=true일 때 Android 설정 로드 — 경로들은 기동 시점에 존재 검증 */
-export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | null {
-  if (env.NEBULA_ADB_ENABLED !== 'true') return null;
-
-  const adbPath = env.NEBULA_ADB_PATH ?? '/opt/homebrew/bin/adb';
-  try {
-    accessSync(adbPath, constants.X_OK);
-  } catch {
-    throw new Error(
-      `adb 경로가 없거나 실행 권한 없음: ${adbPath} — brew install --cask android-platform-tools (또는 NEBULA_ADB_PATH 지정)`,
-    );
+/**
+ * adb 경로 해석 — 명시(NEBULA_ADB_PATH) 우선, 없으면 PATH·표준 위치 탐색.
+ * 미설치면 null 반환 → Android 자동 비활성 (설치돼 있으면 항상 활성). 명시 경로 오타만 즉시 실패
+ */
+function resolveAdbPath(env: NodeJS.ProcessEnv): string | null {
+  const explicit = env.NEBULA_ADB_PATH?.trim();
+  if (explicit) {
+    try {
+      accessSync(explicit, constants.X_OK);
+      return explicit;
+    } catch {
+      throw new Error(`NEBULA_ADB_PATH가 없거나 실행 권한 없음: ${explicit}`);
+    }
   }
+
+  // PATH 우선 — SDK platform-tools든 brew든 사용자 환경을 그대로 존중
+  const candidates: string[] = [];
+  for (const dir of (env.PATH ?? '').split(':')) {
+    if (dir) candidates.push(join(dir, 'adb'));
+  }
+  // PATH에 없을 때의 표준 위치 (Apple Silicon·Intel brew, Android SDK 기본)
+  candidates.push(
+    '/opt/homebrew/bin/adb',
+    '/usr/local/bin/adb',
+    join(homedir(), 'Library/Android/sdk/platform-tools/adb'),
+  );
+  for (const candidate of candidates) {
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // 다음 후보
+    }
+  }
+  return null;
+}
+
+/** Android 설정 로드 — adb가 있으면 항상 활성 (별도 켜기 플래그 없음), 없으면 null */
+export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | null {
+  const adbPath = resolveAdbPath(env);
+  if (!adbPath) return null;
 
   const basePort = parsePositiveInt(
     'NEBULA_ANDROID_BASE_PORT',
@@ -324,10 +349,18 @@ export function parseAndroidConfig(env: NodeJS.ProcessEnv): AndroidEnvConfig | n
 
   return {
     adbPath,
-    runnerApkPath: parseAndroidArtifact('NEBULA_ANDROID_RUNNER_APK', env.NEBULA_ANDROID_RUNNER_APK),
+    runnerApkPath: resolveArtifact(
+      'NEBULA_ANDROID_RUNNER_APK',
+      env.NEBULA_ANDROID_RUNNER_APK,
+      DEFAULT_RUNNER_APK,
+    ),
     basePort,
     logDir: env.NEBULA_CONTROLLER_LOG_DIR ?? join(homedir(), '.nebula', 'logs'),
-    mirrorDexPath: parseAndroidArtifact('NEBULA_ANDROID_MIRROR_DEX', env.NEBULA_ANDROID_MIRROR_DEX),
+    mirrorDexPath: resolveArtifact(
+      'NEBULA_ANDROID_MIRROR_DEX',
+      env.NEBULA_ANDROID_MIRROR_DEX,
+      DEFAULT_MIRROR_DEX,
+    ),
     mirrorBasePort,
     supervisorTuning: parseAndroidSupervisorTuning(env),
     runnerTuning: parseAndroidRunnerTuning(env),
@@ -386,15 +419,19 @@ function parseAndroidMirrorTuning(env: NodeJS.ProcessEnv): AndroidMirrorTuning {
   });
 }
 
-/** 지정 시 존재 확인 — 경로 오타가 무한 재시도 루프로만 드러나지 않게 */
-function parseAndroidArtifact(name: string, raw: string | undefined): string | null {
-  if (!raw || raw.trim().length === 0) return null;
+/**
+ * 산출물 경로 해석 — 명시 override 우선(오타면 즉시 실패), 미지정 시 레포 빌드 기본값.
+ * 기본값은 존재 검증 안 함 — 아직 빌드 전일 수 있고, 런타임(adb push/install)이 실패를 시끄럽게 드러냄
+ */
+function resolveArtifact(name: string, raw: string | undefined, fallback: string): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return fallback;
   try {
-    accessSync(raw, constants.R_OK);
+    accessSync(trimmed, constants.R_OK);
   } catch {
-    throw new Error(`${name} 경로 없음: ${raw} — scripts/build-android.sh로 빌드`);
+    throw new Error(`${name} 경로 없음: ${trimmed} — scripts/build-android.sh로 빌드`);
   }
-  return raw;
+  return trimmed;
 }
 
 /** Controller 토큰 — 빈 값은 미설정 취급, 설정 시 서버 토큰과 같은 최소 길이 강제 */

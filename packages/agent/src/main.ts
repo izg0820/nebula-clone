@@ -6,7 +6,7 @@ import { AndroidSupervisor } from './android-supervisor';
 import { CommandExecutor } from './command-executor';
 import { CompositeResolver } from './composite-resolver';
 import { loadConfig } from './config';
-import { ControllerEndpointResolver, StaticControllerRegistry } from './controller-registry';
+import { ControllerEndpointResolver } from './controller-registry';
 import { ControllerSupervisor } from './controller-supervisor';
 import { IosDiscoverySource } from './device-discovery';
 import { DiscoveryAggregator } from './discovery-aggregator';
@@ -19,12 +19,9 @@ import { StreamManager } from './stream-manager';
 /** Controller 준비 상태 태그 — 서버에서 tags:["controller-ready"]로 점유 필터 가능 */
 const READY_TAG = 'controller-ready';
 
-/** 수퍼바이저 모드면 생성, 아니면 null (정적 포트 매핑 사용) */
+/** iOS 수퍼바이저 — NEBULA_XCODEBUILD_ENABLED=true일 때만, 아니면 null(iOS 제어 비활성) */
 function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupervisor | null {
   if (!config.supervisor) return null;
-  if (config.controllerPorts.size > 0) {
-    logger.warn('수퍼바이저 모드에서는 NEBULA_CONTROLLER_PORTS 무시됨');
-  }
   return new ControllerSupervisor({
     ...config.supervisor,
     controllerToken: config.controllerToken,
@@ -32,22 +29,16 @@ function createSupervisor(config: ReturnType<typeof loadConfig>): ControllerSupe
 }
 
 /**
- * 미러링 관리자 — 플랫폼별 스트림 팩토리 주입.
- * iOS는 NEBULA_MIRROR_HELPER, Android는 NEBULA_ANDROID_MIRROR_DEX — 둘 다 미설정 시 전체 비활성
+ * 미러링 관리자 — 플랫폼별 스트림 팩토리 주입 (미러링은 필수, 항상 구동).
+ * 경로는 config가 레포 빌드 산출물로 기본값 계산 — 산출물 미빌드 시 런타임이 재시도·로깅
  */
 function createStreamManager(
   config: ReturnType<typeof loadConfig>,
   tunnel: ServerTunnel,
   discovery: DiscoveryAggregator,
-): StreamManager | null {
+): StreamManager {
   const helperPath = config.mirrorHelperPath;
   const android = config.android;
-  const mirrorDexPath = android?.mirrorDexPath ?? null;
-  if (!helperPath) logger.warn('NEBULA_MIRROR_HELPER 미설정 — iOS 미러링 비활성');
-  if (android && !mirrorDexPath) {
-    logger.warn('NEBULA_ANDROID_MIRROR_DEX 미설정 — Android 미러링 비활성');
-  }
-  if (!helperPath && !mirrorDexPath) return null;
 
   const sendFrame = (frame: AgentFrame): boolean => tunnel.sendFrame(frame);
   // 기기별 미러링 포트 고정 할당 — 같은 기기는 재발견돼도 같은 포트 (잔존 forward와의 충돌 방지)
@@ -64,12 +55,12 @@ function createStreamManager(
     const device = discovery.devices.find((item) => item.id === deviceId);
     if (!device) return null;
     if (device.platform === 'android') {
-      if (!android || !mirrorDexPath) return null;
+      if (!android) return null; // adb 없으면 android 기기 자체가 발견 안 됨 — 도달하지 않음
       return new AndroidStream(
         {
           adbPath: android.adbPath,
           serial: deviceId,
-          mirrorDexPath,
+          mirrorDexPath: android.mirrorDexPath,
           mirrorPort: allocateMirrorPort(deviceId),
           logDir: android.logDir,
           tuning: android.mirrorTuning,
@@ -77,13 +68,12 @@ function createStreamManager(
         sendFrame,
       );
     }
-    if (!helperPath) return null;
     // iOS: mirror-helper의 캡처 장치 매칭(--name)에 기기 이름 사용
     return new H264Stream({ helperPath, deviceName: device.name, deviceId }, sendFrame);
   });
 }
 
-/** 발견 소스 구성 — iOS는 항상, Android는 NEBULA_ADB_ENABLED=true일 때만 */
+/** 발견 소스 구성 — iOS는 항상, Android는 adb가 설치돼 있으면 (config.android) */
 function createDiscoverySources(config: ReturnType<typeof loadConfig>): DiscoverySource[] {
   const sources: DiscoverySource[] = [new IosDiscoverySource()];
   if (config.android) {
@@ -92,15 +82,11 @@ function createDiscoverySources(config: ReturnType<typeof loadConfig>): Discover
   return sources;
 }
 
-/** Android 러너 수퍼바이저 — 러너 APK 미지정 시 발견만 (제어 비활성) */
+/** Android 러너 수퍼바이저 — adb 있으면 항상 (config.android는 adb 없을 때만 null) */
 function createAndroidSupervisor(
   config: ReturnType<typeof loadConfig>,
 ): AndroidSupervisor | null {
   if (!config.android) return null;
-  if (!config.android.runnerApkPath) {
-    logger.warn('NEBULA_ANDROID_RUNNER_APK 미설정 — Android 발견만, 제어 비활성');
-    return null;
-  }
   return new AndroidSupervisor({
     adbPath: config.android.adbPath,
     runnerApkPath: config.android.runnerApkPath,
@@ -135,7 +121,6 @@ async function main(): Promise<void> {
   const resolver: ControllerEndpointResolver = new CompositeResolver([
     ...(supervisor ? [supervisor] : []),
     ...(androidSupervisor ? [androidSupervisor] : []),
-    new StaticControllerRegistry(config.controllerPorts),
   ]);
   const executor = new CommandExecutor(resolver, config.controllerToken);
   let isDiscoveryInFlight = false;
@@ -165,7 +150,7 @@ async function main(): Promise<void> {
       supervisor?.syncDevices(iosDeviceIds);
       androidSupervisor?.syncDevices(androidDeviceIds);
       // 미러링 상시 구동 — 시청자 없어도 캡처 유지 (iOS·Android 공통, 팩토리가 플랫폼 분기)
-      streamManager?.syncAlwaysOn([...iosDeviceIds, ...androidDeviceIds]);
+      streamManager.syncAlwaysOn([...iosDeviceIds, ...androidDeviceIds]);
       if (!shouldRegister) return;
 
       const sent = tunnel.sendRegister(withReadinessTag(discovery.devices, resolver));
@@ -199,7 +184,7 @@ async function main(): Promise<void> {
     logger.info('Agent 종료');
     clearInterval(discoveryTimer);
     clearInterval(heartbeatTimer);
-    streamManager?.stopAll();
+    streamManager.stopAll();
     supervisor?.stopAll();
     androidSupervisor?.stopAll();
     tunnel.close();
@@ -209,7 +194,7 @@ async function main(): Promise<void> {
       await Promise.all([
         supervisor?.awaitTermination(SHUTDOWN_GRACE_MS),
         androidSupervisor?.awaitTermination(SHUTDOWN_GRACE_MS),
-        streamManager?.awaitTermination(SHUTDOWN_GRACE_MS),
+        streamManager.awaitTermination(SHUTDOWN_GRACE_MS),
       ]);
       process.exit(0);
     })();
