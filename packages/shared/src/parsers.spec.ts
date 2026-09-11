@@ -154,4 +154,18 @@ describe('parseServerMessage', () => {
     expect(parseServerMessage(JSON.stringify({ type: 'occupancyEnded', deviceId: 'u1' }))).toBeNull();
     expect(parseServerMessage(JSON.stringify({ ...ended, deviceId: '../etc' }))).toBeNull();
   });
+
+  test('streamDemand 파싱 — 빈 목록 허용, 잘못된 deviceId는 폐기', () => {
+    expect(parseServerMessage(JSON.stringify({ type: 'streamDemand', deviceIds: [] }))).toEqual({
+      type: 'streamDemand',
+      deviceIds: [],
+    });
+    expect(
+      parseServerMessage(JSON.stringify({ type: 'streamDemand', deviceIds: ['u1', 'u2'] })),
+    ).toEqual({ type: 'streamDemand', deviceIds: ['u1', 'u2'] });
+    expect(
+      parseServerMessage(JSON.stringify({ type: 'streamDemand', deviceIds: ['../etc'] })),
+    ).toBeNull();
+    expect(parseServerMessage(JSON.stringify({ type: 'streamDemand' }))).toBeNull();
+  });
 });

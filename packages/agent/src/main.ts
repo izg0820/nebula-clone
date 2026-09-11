@@ -14,9 +14,13 @@ import { DiscoverySource } from './discovery-source';
 import { logger } from './logger';
 import { H264Stream } from './h264-stream';
 import { ServerTunnel } from './server-tunnel';
+import { StreamDemandGate } from './stream-demand-gate';
 import { StreamManager } from './stream-manager';
 
 /** Controller 준비 상태 태그 — 서버에서 tags:["controller-ready"]로 점유 필터 가능 */
+/** 업링크 지표 로그 주기 — 상시 데몬이라 과하지 않게 */
+const METRICS_LOG_INTERVAL_MS = 60_000;
+
 const READY_TAG = 'controller-ready';
 
 /** iOS 수퍼바이저 — NEBULA_XCODEBUILD_ENABLED=true일 때만, 아니면 null(iOS 제어 비활성) */
@@ -36,11 +40,16 @@ function createStreamManager(
   config: ReturnType<typeof loadConfig>,
   tunnel: ServerTunnel,
   discovery: DiscoveryAggregator,
+  demandGate: StreamDemandGate,
 ): StreamManager {
   const helperPath = config.mirrorHelperPath;
   const android = config.android;
 
-  const sendFrame = (frame: AgentFrame): boolean => tunnel.sendFrame(frame);
+  // 시청자 없는 기기의 프레임은 업링크로 올리지 않는다 (캡처는 그대로 유지)
+  const sendFrame = (frame: AgentFrame): boolean => {
+    if (!demandGate.shouldSend(frame.deviceId)) return false;
+    return tunnel.sendFrame(frame);
+  };
   // 기기별 미러링 포트 고정 할당 — 같은 기기는 재발견돼도 같은 포트 (잔존 forward와의 충돌 방지)
   const mirrorPorts = new Map<string, number>();
   const allocateMirrorPort = (serial: string): number => {
@@ -125,6 +134,7 @@ async function main(): Promise<void> {
   const executor = new CommandExecutor(resolver, config.controllerToken);
   let isDiscoveryInFlight = false;
 
+  const demandGate = new StreamDemandGate();
   const tunnel = new ServerTunnel(config, {
     onOpen: () => {
       // 재연결 직후 즉시 재등록 — 서버가 오프라인 처리했을 수 있음
@@ -133,10 +143,15 @@ async function main(): Promise<void> {
     onCommand: (command) => executor.execute(command),
     // 점유가 끝나면 그 세대의 대기 명령을 폐기 — 인계 이후 유령 입력 차단
     onOccupancyEnded: (deviceId, occupantId) => executor.revokeOccupation(deviceId, occupantId),
+    // 시청자 유무 스냅샷 — 전송 대상 갱신 (캡처 pre-warm은 영향 없음)
+    onStreamDemand: (deviceIds) => demandGate.apply(deviceIds),
     // 단선 중 서버에서 점유가 바뀌었을 수 있으므로 세대를 전부 버림 (재연결 후 새 명령부터 유효)
-    onDisconnect: () => executor.revokeAllOccupations(),
+    onDisconnect: () => {
+      executor.revokeAllOccupations();
+      demandGate.reset();
+    },
   });
-  const streamManager = createStreamManager(config, tunnel, discovery);
+  const streamManager = createStreamManager(config, tunnel, discovery, demandGate);
 
   /** 발견 → 등록. 인플라이트 가드로 동시 실행·늦은 결과 덮어쓰기 방지 */
   async function discoverAndRegister(): Promise<void> {
@@ -177,6 +192,13 @@ async function main(): Promise<void> {
     tunnel.sendHeartbeat(deviceIds);
   }, config.heartbeatIntervalMs);
 
+  // 업링크 관측 — 영상이 제어 응답을 밀어내는지 판단할 근거 (드롭·큐 최대치)
+  const metricsTimer = setInterval(() => {
+    const metrics = tunnel.metrics();
+    if (metrics.sentFrameCount === 0 && metrics.droppedFrameCount === 0) return;
+    logger.info(metrics, '업링크 지표');
+  }, METRICS_LOG_INTERVAL_MS);
+
   // 자식 프로세스 종료 대기 상한 — 수퍼바이저 SIGKILL 에스컬레이션(3초)보다 길게
   const SHUTDOWN_GRACE_MS = 5_000;
   let isShuttingDown = false;
@@ -188,6 +210,7 @@ async function main(): Promise<void> {
     logger.info('Agent 종료');
     clearInterval(discoveryTimer);
     clearInterval(heartbeatTimer);
+    clearInterval(metricsTimer);
     streamManager.stopAll();
     supervisor?.stopAll();
     androidSupervisor?.stopAll();

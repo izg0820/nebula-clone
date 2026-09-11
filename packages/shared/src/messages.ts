@@ -47,7 +47,17 @@ export interface OccupancyEndedMessage {
   readonly occupantId: string;
 }
 
-export type ServerMessage = CommandMessage | OccupancyEndedMessage;
+/**
+ * 미러링 수요 스냅샷 — 이 Agent 소속 기기 중 "지금 시청자가 붙어 있는" 기기 전체 목록.
+ * 부분 갱신이 아니라 매번 전체를 보내므로 유실·순서 뒤바뀜에도 상태가 어긋나지 않는다.
+ * Agent는 캡처는 유지(pre-warm)하되, 목록에 없는 기기의 프레임은 터널로 보내지 않는다
+ */
+export interface StreamDemandMessage {
+  readonly type: 'streamDemand';
+  readonly deviceIds: readonly string[];
+}
+
+export type ServerMessage = CommandMessage | OccupancyEndedMessage | StreamDemandMessage;
 
 // ── 빌더 ─────────────────────────────────────────────────
 
@@ -70,6 +80,12 @@ export function buildCommandMessage(
   action: DeviceAction,
 ): CommandMessage {
   return { type: 'command', requestId, deviceId, occupantId, action };
+}
+
+export function buildStreamDemandMessage(
+  deviceIds: readonly string[],
+): StreamDemandMessage {
+  return { type: 'streamDemand', deviceIds };
 }
 
 export function buildOccupancyEndedMessage(

@@ -1,4 +1,5 @@
 import { AddressInfo } from 'net';
+import { FRAME_FORMAT_H264 } from '@nebula/shared';
 import { WebSocketServer } from 'ws';
 import { AgentConfig } from './config';
 import { backoffDelayMs, ServerTunnel, TunnelTimings } from './server-tunnel';
@@ -233,5 +234,65 @@ describe('ServerTunnel (실제 WS 서버 연동)', () => {
       onDisconnect: () => done(),
     });
     tunnel.connect();
+  });
+
+  test('streamDemand 수신 시 onStreamDemand 호출 — 회신 없음', (done) => {
+    const messagesFromAgent: unknown[] = [];
+    server.on('connection', (socket) => {
+      socket.send(JSON.stringify({ type: 'streamDemand', deviceIds: ['u1', 'u2'] }));
+      socket.on('message', (data) => messagesFromAgent.push(JSON.parse(data.toString())));
+    });
+
+    tunnel = new ServerTunnel(createConfig(), {
+      onOpen: () => undefined,
+      onStreamDemand: (deviceIds) => {
+        expect(deviceIds).toEqual(['u1', 'u2']);
+        expect(messagesFromAgent).toHaveLength(0);
+        done();
+      },
+    });
+    tunnel.connect();
+  });
+
+  test('metrics는 전송 프레임·바이트를 누계', (done) => {
+    // 연결 성립(onOpen) 이후에 전송 — 서버 쪽 connection 시점엔 클라 소켓이 아직 CONNECTING
+    const sendAndAssert = (): void => {
+      const sent = tunnel?.sendFrame({
+        deviceId: 'u1',
+        format: FRAME_FORMAT_H264,
+        isKey: true,
+        width: 2,
+        height: 2,
+        stampMs: 1,
+        payload: new Uint8Array([1, 2, 3, 4]),
+      });
+
+      expect(sent).toBe(true);
+      const metrics = tunnel?.metrics();
+      expect(metrics?.sentFrameCount).toBe(1);
+      expect(metrics?.sentFrameBytes).toBeGreaterThan(4);
+      expect(metrics?.droppedFrameCount).toBe(0);
+      done();
+    };
+
+    tunnel = new ServerTunnel(createConfig(), { onOpen: sendAndAssert });
+    tunnel.connect();
+  });
+
+  test('터널 미연결이면 sendFrame은 false — 지표도 증가하지 않음', () => {
+    const offline = new ServerTunnel(createConfig(), { onOpen: () => undefined });
+
+    const sent = offline.sendFrame({
+      deviceId: 'u1',
+      format: FRAME_FORMAT_H264,
+      isKey: true,
+      width: 2,
+      height: 2,
+      stampMs: 1,
+      payload: new Uint8Array([1]),
+    });
+
+    expect(sent).toBe(false);
+    expect(offline.metrics().sentFrameCount).toBe(0);
   });
 });

@@ -29,10 +29,13 @@ interface DevicesServiceMock {
   recordHeartbeat: jest.Mock;
   handleAgentDisconnect: jest.Mock;
   getById: jest.Mock;
+  listAll: jest.Mock;
 }
 
 interface RelayMock {
   broadcast: jest.Mock;
+  viewedDeviceIds: jest.Mock;
+  onDemandChanged: jest.Mock;
 }
 
 function createGateway(): {
@@ -46,9 +49,12 @@ function createGateway(): {
     recordHeartbeat: jest.fn(),
     handleAgentDisconnect: jest.fn(),
     getById: jest.fn().mockReturnValue({ agentId: 'agent-1' }),
+    listAll: jest.fn().mockReturnValue([{ id: 'u1', agentId: 'agent-1' }]),
   };
   const relay: RelayMock = {
     broadcast: jest.fn(),
+    viewedDeviceIds: jest.fn().mockReturnValue([]),
+    onDemandChanged: jest.fn().mockReturnValue(() => undefined),
   };
   return {
     gateway: new AgentsGateway(
@@ -470,5 +476,91 @@ describe('AgentsGateway', () => {
     const { gateway } = createGateway();
 
     expect(() => gateway.revokeOccupancy('udid-1', 'occupant-A', null)).not.toThrow();
+  });
+
+  test('register 직후 시청 수요 스냅샷을 전송 — 재연결 Agent의 미러링 정지 방지', () => {
+    const { gateway, relay } = createGateway();
+    relay.viewedDeviceIds.mockReturnValue(['u1']);
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'register',
+        devices: [{ id: 'u1', name: 'n', platform: 'ios', osVersion: '17', tags: [] }],
+      }),
+    );
+
+    const demands = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'streamDemand');
+    expect(demands).toEqual([{ type: 'streamDemand', deviceIds: ['u1'] }]);
+  });
+
+  test('수요 스냅샷은 그 Agent 소속 기기만 포함', () => {
+    const { gateway, relay, service } = createGateway();
+    // u1(이 Agent) + u9(다른 Agent) 둘 다 시청 중
+    relay.viewedDeviceIds.mockReturnValue(['u1', 'u9']);
+    service.listAll.mockReturnValue([
+      { id: 'u1', agentId: 'agent-1' },
+      { id: 'u9', agentId: 'agent-2' },
+    ]);
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+
+    socket.emit(
+      'message',
+      JSON.stringify({
+        type: 'register',
+        devices: [{ id: 'u1', name: 'n', platform: 'ios', osVersion: '17', tags: [] }],
+      }),
+    );
+
+    const demands = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'streamDemand');
+    expect(demands).toEqual([{ type: 'streamDemand', deviceIds: ['u1'] }]);
+  });
+
+  test('시청 수요 변동은 해당 기기를 가진 Agent에 스냅샷으로 전달', () => {
+    const { gateway, relay } = createGateway();
+    const demandListeners: Array<(deviceId: string) => void> = [];
+    relay.onDemandChanged.mockImplementation((listener: (deviceId: string) => void) => {
+      demandListeners.push(listener);
+      return () => undefined;
+    });
+    gateway.onApplicationBootstrap();
+    const socket = new FakeSocket();
+    gateway.handleConnection(
+      socket as unknown as WebSocket,
+      createRequest('/agent?token=agent-token&agentId=agent-1'),
+    );
+    relay.viewedDeviceIds.mockReturnValue(['u1']);
+
+    for (const listener of demandListeners) listener('u1');
+
+    const demands = socket.sentPayloads
+      .map((payload) => JSON.parse(payload))
+      .filter((message) => message.type === 'streamDemand');
+    expect(demands).toEqual([{ type: 'streamDemand', deviceIds: ['u1'] }]);
+  });
+
+  test('미연결 Agent의 수요 변동은 조용히 무시', () => {
+    const { gateway, relay } = createGateway();
+    const demandListeners: Array<(deviceId: string) => void> = [];
+    relay.onDemandChanged.mockImplementation((listener: (deviceId: string) => void) => {
+      demandListeners.push(listener);
+      return () => undefined;
+    });
+    gateway.onApplicationBootstrap();
+
+    expect(() => demandListeners.forEach((listener) => listener('u1'))).not.toThrow();
   });
 });

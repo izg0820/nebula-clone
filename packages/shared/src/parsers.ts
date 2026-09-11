@@ -142,6 +142,13 @@ export function parseServerMessage(raw: string): ServerMessage | null {
     };
   }
   if (
+    message.type === 'streamDemand' &&
+    Array.isArray(message.deviceIds) &&
+    message.deviceIds.every(isDeviceId)
+  ) {
+    return { type: 'streamDemand', deviceIds: message.deviceIds as string[] };
+  }
+  if (
     message.type === 'occupancyEnded' &&
     isDeviceId(message.deviceId) &&
     isOccupantId(message.occupantId)

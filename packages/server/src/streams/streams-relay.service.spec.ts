@@ -208,4 +208,53 @@ describe('StreamsRelayService', () => {
     expect(previous.sent).toHaveLength(0);
     expect(current.sent).toHaveLength(1);
   });
+
+  test('시청자 0↔1 경계에서만 수요 변동을 알림', () => {
+    const relay = new StreamsRelayService();
+    const changed: string[] = [];
+    relay.onDemandChanged((deviceId) => changed.push(deviceId));
+    const first = new FakeViewer();
+    const second = new FakeViewer();
+
+    relay.addViewer('u1', 'occupant-1', first as unknown as WebSocket);
+    relay.addViewer('u1', 'occupant-1', second as unknown as WebSocket); // 1→2, 알림 없음
+    relay.removeViewer('u1', first as unknown as WebSocket); // 2→1, 알림 없음
+    relay.removeViewer('u1', second as unknown as WebSocket); // 1→0
+
+    expect(changed).toEqual(['u1', 'u1']);
+  });
+
+  test('closeViewers로 마지막 시청자가 사라져도 수요 변동을 알림', () => {
+    const relay = new StreamsRelayService();
+    const changed: string[] = [];
+    const viewer = new FakeViewer();
+    relay.addViewer('u1', 'occupant-A', viewer as unknown as WebSocket);
+    relay.onDemandChanged((deviceId) => changed.push(deviceId));
+
+    relay.closeViewers('u1', 'occupant-A', 4408, 'occupation released');
+
+    expect(changed).toEqual(['u1']);
+  });
+
+  test('viewedDeviceIds는 시청자가 붙은 기기만 반환', () => {
+    const relay = new StreamsRelayService();
+    const viewer = new FakeViewer();
+    relay.addViewer('u1', 'occupant-1', viewer as unknown as WebSocket);
+
+    expect(relay.viewedDeviceIds()).toEqual(['u1']);
+
+    relay.removeViewer('u1', viewer as unknown as WebSocket);
+    expect(relay.viewedDeviceIds()).toEqual([]);
+  });
+
+  test('구독자가 던져도 시청자 등록은 성립', () => {
+    const relay = new StreamsRelayService();
+    relay.onDemandChanged(() => {
+      throw new Error('구독자 오류');
+    });
+    const viewer = new FakeViewer();
+
+    expect(() => relay.addViewer('u1', 'occupant-1', viewer as unknown as WebSocket)).not.toThrow();
+    expect(relay.viewedDeviceIds()).toEqual(['u1']);
+  });
 });

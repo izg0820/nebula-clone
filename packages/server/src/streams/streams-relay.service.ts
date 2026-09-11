@@ -22,6 +22,34 @@ export class StreamsRelayService {
    * 세대를 같이 들고 있어야 점유가 끝났을 때 "그 세대의 소켓만" 정확히 회수 가능
    */
   private readonly viewers = new Map<string, Map<WebSocket, string>>();
+  /** 시청 수요 변동 구독자 — Agent에 프레임 전송 여부를 알리는 배선용 */
+  private readonly demandListeners = new Set<(deviceId: string) => void>();
+
+  /** 지금 시청자가 붙어 있는 기기 목록 — 수요 스냅샷의 원본 */
+  viewedDeviceIds(): string[] {
+    return [...this.viewers.keys()];
+  }
+
+  /**
+   * 기기의 시청자 유무가 바뀔 때 호출됨 (0→1, 1→0).
+   * 매 프레임이 아니라 경계에서만 발생하므로 구독 비용은 무시할 수준
+   */
+  onDemandChanged(listener: (deviceId: string) => void): () => void {
+    this.demandListeners.add(listener);
+    return () => {
+      this.demandListeners.delete(listener);
+    };
+  }
+
+  private notifyDemandChanged(deviceId: string): void {
+    for (const listener of this.demandListeners) {
+      try {
+        listener(deviceId);
+      } catch (error) {
+        this.logger.error(`시청 수요 구독자 실패 (device=${deviceId})`, error as Error);
+      }
+    }
+  }
 
   addViewer(deviceId: string, occupantId: string, socket: WebSocket): void {
     const existing = this.viewers.get(deviceId);
@@ -30,6 +58,8 @@ export class StreamsRelayService {
       return;
     }
     this.viewers.set(deviceId, new Map([[socket, occupantId]]));
+    // 0→1 — 이 기기의 프레임 전송을 Agent에 요청
+    this.notifyDemandChanged(deviceId);
   }
 
   removeViewer(deviceId: string, socket: WebSocket): void {
@@ -38,6 +68,8 @@ export class StreamsRelayService {
     sockets.delete(socket);
     if (sockets.size > 0) return;
     this.viewers.delete(deviceId);
+    // 1→0 — 업링크 낭비를 막도록 전송 중단 요청 (캡처는 Agent에서 계속)
+    this.notifyDemandChanged(deviceId);
   }
 
   /**
@@ -56,6 +88,7 @@ export class StreamsRelayService {
     if (sockets.size > 0) return;
     // 뒤늦은 removeViewer는 no-op이라 안전
     this.viewers.delete(deviceId);
+    this.notifyDemandChanged(deviceId);
   }
 
   /** Agent 프레임을 해당 기기 시청자 전원에게 전달 */

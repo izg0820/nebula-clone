@@ -12,6 +12,7 @@ import {
   RegisterDeviceInput,
 } from '@nebula/shared';
 import { AgentConfig } from './config';
+import { decideFrameSend } from './frame-backpressure';
 import { logger } from './logger';
 
 /** 재연결 백오프 상수 */
@@ -25,12 +26,6 @@ const STABLE_RESET_MS = 30_000;
 const PING_INTERVAL_MS = 30_000;
 const PONG_TIMEOUT_MS = 10_000;
 
-/**
- * 프레임 백프레셔 — 소켓 송신 큐가 이 이상 밀리면 비키프레임 드롭.
- * 드롭 지점이 없으면 업링크 정체 시 지연이 스스로 회복되지 않고 메모리만 쌓임
- * (키프레임은 유지 — 디코더가 다음 IDR에서 재동기화)
- */
-const FRAME_BACKPRESSURE_BYTES = 512 * 1024;
 /** 드롭 관측 로그 주기 */
 const DROP_LOG_INTERVAL = 100;
 
@@ -48,6 +43,17 @@ export function backoffDelayMs(attempt: number): number {
   return Math.min(delay, BACKOFF_MAX_MS);
 }
 
+/** 업링크 관측 지표 — 영상이 제어 응답을 밀어내는지 판정하는 근거 */
+export interface TunnelMetrics {
+  readonly sentFrameCount: number;
+  readonly sentFrameBytes: number;
+  /** 드롭 총계 (비키프레임 + 상한 초과 키프레임) */
+  readonly droppedFrameCount: number;
+  readonly droppedKeyFrameCount: number;
+  readonly peakBufferedBytes: number;
+  readonly bufferedBytes: number;
+}
+
 export interface TunnelCallbacks {
   /** 연결(재연결 포함) 성립 직후 — 즉시 재등록용 */
   readonly onOpen: () => void;
@@ -57,6 +63,8 @@ export interface TunnelCallbacks {
   readonly onOccupancyEnded?: (deviceId: string, occupantId: string) => void;
   /** 터널 단선 — 서버 검증을 거치지 않은 옛 세대가 남지 않도록 전부 폐기 */
   readonly onDisconnect?: () => void;
+  /** 시청 수요 스냅샷 — 목록에 있는 기기만 프레임 전송 (캡처는 무관하게 유지) */
+  readonly onStreamDemand?: (deviceIds: readonly string[]) => void;
 }
 
 /** 테스트용 타이밍 오버라이드 */
@@ -85,6 +93,13 @@ export class ServerTunnel {
   private readonly stableResetMs: number;
   /** 백프레셔로 드롭한 프레임 누계 (관측용) */
   private droppedFrameCount = 0;
+  /** 절대 상한 초과로 드롭한 키프레임 누계 — 0이 아니면 업링크가 영상 비트레이트에 못 미친다는 신호 */
+  private droppedKeyFrameCount = 0;
+  /** 전송한 프레임·바이트 누계 (드롭률 계산용) */
+  private sentFrameCount = 0;
+  private sentFrameBytes = 0;
+  /** 관측된 송신 큐 최대치 — 제어 지연의 상한 추정에 사용 */
+  private peakBufferedBytes = 0;
 
   constructor(
     private readonly config: AgentConfig,
@@ -156,21 +171,53 @@ export class ServerTunnel {
     return this.send(JSON.stringify(buildHeartbeatMessage(deviceIds)));
   }
 
-  /** 미러링 프레임 푸시 (바이너리) — 업링크 정체 시 비키프레임 드롭 */
+  /**
+   * 미러링 프레임 푸시 (바이너리)
+   * - 1단계: 큐가 밀리면 비키프레임 드롭 (화면은 다음 IDR에서 회복)
+   * - 2단계: 절대 상한 초과면 키프레임도 드롭 — 제어 응답이 영상 뒤에 무한정 밀리지 않게
+   */
   sendFrame(frame: AgentFrame): boolean {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
-    if (!frame.isKey && this.socket.bufferedAmount > FRAME_BACKPRESSURE_BYTES) {
+    const buffered = this.socket.bufferedAmount;
+    this.peakBufferedBytes = Math.max(this.peakBufferedBytes, buffered);
+
+    const decision = decideFrameSend(frame.isKey, buffered);
+    if (decision === 'drop_queue_full') {
+      this.droppedKeyFrameCount += 1;
       this.droppedFrameCount += 1;
-      if (this.droppedFrameCount % DROP_LOG_INTERVAL === 1) {
+      if (this.droppedKeyFrameCount % DROP_LOG_INTERVAL === 1) {
         logger.warn(
-          { dropped: this.droppedFrameCount, buffered: this.socket.bufferedAmount },
-          '업링크 정체 — 비키프레임 드롭 중',
+          { droppedKey: this.droppedKeyFrameCount, buffered },
+          '송신 큐 상한 초과 — 키프레임까지 드롭 (업링크 부족)',
         );
       }
       return false;
     }
-    this.socket.send(encodeAgentFrame(frame));
+    if (decision === 'drop_backpressure') {
+      this.droppedFrameCount += 1;
+      if (this.droppedFrameCount % DROP_LOG_INTERVAL === 1) {
+        logger.warn({ dropped: this.droppedFrameCount, buffered }, '업링크 정체 — 비키프레임 드롭 중');
+      }
+      return false;
+    }
+
+    const payload = encodeAgentFrame(frame);
+    this.socket.send(payload);
+    this.sentFrameCount += 1;
+    this.sentFrameBytes += payload.byteLength;
     return true;
+  }
+
+  /** 업링크 관측 지표 — 주기 로깅·부하 측정용 (누계, 리셋 없음) */
+  metrics(): TunnelMetrics {
+    return {
+      sentFrameCount: this.sentFrameCount,
+      sentFrameBytes: this.sentFrameBytes,
+      droppedFrameCount: this.droppedFrameCount,
+      droppedKeyFrameCount: this.droppedKeyFrameCount,
+      peakBufferedBytes: this.peakBufferedBytes,
+      bufferedBytes: this.socket?.bufferedAmount ?? 0,
+    };
   }
 
   /** 종료 — 재연결·keepalive 중단 후 소켓 닫기 */
@@ -186,6 +233,11 @@ export class ServerTunnel {
     const message = parseServerMessage(raw);
     if (!message) {
       logger.warn('잘못된 서버 메시지 무시');
+      return;
+    }
+    if (message.type === 'streamDemand') {
+      logger.debug({ deviceIds: message.deviceIds }, '시청 수요 갱신');
+      this.callbacks.onStreamDemand?.(message.deviceIds);
       return;
     }
     if (message.type === 'occupancyEnded') {

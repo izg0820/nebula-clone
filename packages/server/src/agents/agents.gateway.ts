@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   OnGatewayConnection,
@@ -8,6 +8,7 @@ import {
 import {
   buildCommandMessage,
   buildOccupancyEndedMessage,
+  buildStreamDemandMessage,
   COMMAND_ERROR_AGENT_DISCONNECTED,
   COMMAND_ERROR_OCCUPATION_ENDED,
   COMMAND_ERROR_TIMEOUT,
@@ -72,7 +73,9 @@ export class AgentNotConnectedError extends Error {
  * - 연결 종료 시 해당 Agent 기기 전체 오프라인 처리
  */
 @WebSocketGateway({ path: AGENT_WS_PATH, maxPayload: AGENT_WS_MAX_PAYLOAD_BYTES })
-export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class AgentsGateway
+  implements OnGatewayConnection, OnGatewayDisconnect, OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly logger = new Logger(AgentsGateway.name);
   /** agentId → 소켓 (명령 라우팅용) */
   private readonly agentSockets = new Map<string, AgentSocket>();
@@ -82,12 +85,52 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly agentCapabilities = new Map<string, ReadonlySet<string>>();
   /** WS 핸드셰이크 인증 실패 rate limit — HTTP Throttler가 못 보는 경로 */
   private readonly rateLimiter = new ConnectionRateLimiter();
+  /** 시청 수요 구독 해지 */
+  private unsubscribeDemand: (() => void) | null = null;
 
   constructor(
     private readonly config: ConfigService,
     private readonly devicesService: DevicesService,
     private readonly streamsRelay: StreamsRelayService,
   ) {}
+
+  onApplicationBootstrap(): void {
+    // 시청자 0↔1 경계에서만 발생 — 해당 기기를 가진 Agent에 수요 스냅샷 재전송
+    this.unsubscribeDemand = this.streamsRelay.onDemandChanged((deviceId) => {
+      this.sendStreamDemandFor(this.agentIdOfDevice(deviceId));
+    });
+  }
+
+  onApplicationShutdown(): void {
+    if (!this.unsubscribeDemand) return;
+    this.unsubscribeDemand();
+    this.unsubscribeDemand = null;
+  }
+
+  /**
+   * Agent에 현재 시청 수요 스냅샷 전송 — 그 Agent 소속 기기 중 시청자가 붙은 것만.
+   * 부분 갱신이 아니라 전체 목록이라 유실 시에도 다음 전송에서 곧바로 정합
+   */
+  private sendStreamDemandFor(agentId: string | null): void {
+    if (!agentId) return;
+    const socket = this.agentSockets.get(agentId);
+    if (!socket || socket.readyState !== socket.OPEN) return;
+
+    const viewed = new Set(this.streamsRelay.viewedDeviceIds());
+    const deviceIds = this.devicesService
+      .listAll()
+      .filter((device) => device.agentId === agentId && viewed.has(device.id))
+      .map((device) => device.id);
+    socket.send(JSON.stringify(buildStreamDemandMessage(deviceIds)));
+  }
+
+  private agentIdOfDevice(deviceId: string): string | null {
+    try {
+      return this.devicesService.getById(deviceId).agentId;
+    } catch {
+      return null;
+    }
+  }
 
   handleConnection(client: AgentSocket, request: IncomingMessage): void {
     const remoteIp = request.socket?.remoteAddress;
@@ -252,6 +295,8 @@ export class AgentsGateway implements OnGatewayConnection, OnGatewayDisconnect {
           new Set(message.capabilities ?? LEGACY_ACTION_KINDS),
         );
         this.logger.log(`기기 등록 (agent=${agentId}): ${message.devices.length}대`);
+        // 등록 직후 스냅샷 — 재연결 Agent가 "수요 없음"으로 오해해 미러링이 멎는 것 방지
+        this.sendStreamDemandFor(agentId);
         return;
       }
       if (message.type === 'heartbeat') {
