@@ -73,6 +73,8 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
   private nextPortOffset = 0;
   private readonly freePorts: number[] = [];
   private terminating: TrackedProcess[] = [];
+  /** 진행 중인 기기측 정리(adb force-stop·forward --remove) — shutdown이 완료를 기다림 */
+  private cleanups: Promise<unknown>[] = [];
   private readonly deps: AndroidSupervisorDeps;
   private readonly tuning: AndroidSupervisorTuning;
 
@@ -114,15 +116,23 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     for (const serial of [...this.sessions.keys()]) this.stopSession(serial);
   }
 
-  /** stop 후 자식(am instrument)이 실제로 죽을 때까지 대기 — Agent exit 전 고아 방지 */
+  /** stop 후 자식(am instrument)·기기측 정리(adb)가 실제로 끝날 때까지 대기 — Agent exit 전 고아 방지 */
   async awaitTermination(maxWaitMs: number): Promise<void> {
     const deadline = Date.now() + maxWaitMs;
     while (Date.now() < deadline) {
       this.terminating = this.terminating.filter((tracked) => !tracked.hasExited);
-      if (this.terminating.length === 0) return;
+      if (this.terminating.length === 0) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     for (const tracked of this.terminating) signalProcessTree(tracked, 'SIGKILL');
+
+    // 기기측 정리 adb 호출 완료 대기 — force-stop이 기기에 닿기 전 process.exit 방지.
+    // adb 자체 타임아웃이 있어 무한 대기 없음. 남은 시간 상한 안에서만 기다림
+    const remaining = Math.max(0, deadline - Date.now());
+    await Promise.race([
+      Promise.allSettled(this.cleanups.splice(0)),
+      new Promise((resolve) => setTimeout(resolve, remaining)),
+    ]);
   }
 
   private startSession(serial: string): void {
@@ -157,8 +167,13 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     const generation = session.generation;
     session.launchedAtMs = Date.now();
     try {
-      await this.prepareDevice(session);
-      if (this.isStale(session, generation)) return;
+      await this.prepareDevice(session, generation);
+      if (this.isStale(session, generation)) {
+        // 준비 도중(최대 60초 install) 기기가 사라졌으면 stopSession이 이미 포트를 반납 예약함.
+        // 그 사이 prepareDevice가 만든 forward가 남아 재사용된 포트를 오염시키지 않게 정리
+        this.trackCleanup(this.removeForward(session));
+        return;
+      }
       this.spawnInstrument(session, generation);
       this.startHealthPolling(session, generation);
     } catch (error) {
@@ -169,7 +184,7 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
   }
 
   /** 기동 전 준비: stayon → (필요 시) install → forward → 유령 러너 정리 */
-  private async prepareDevice(session: Session): Promise<void> {
+  private async prepareDevice(session: Session, generation: number): Promise<void> {
     const serial = session.serial;
     // 화면 꺼짐 상태에서 입력 주입이 막히는 것 방지 — 실패는 무시(권한·기기 정책 편차)
     await this.deps
@@ -182,12 +197,29 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
       await this.deps.runAdb(['-s', serial, 'install', '-r', '-t', '-g', this.config.runnerApkPath], 60_000);
       session.isInstalled = true;
     }
+    // 긴 install 중 기기가 사라졌으면 forward를 만들지 않음 — leaked forward 원천 차단
+    if (this.isStale(session, generation)) return;
 
     await this.deps.runAdb([
       '-s', serial, 'forward', `tcp:${session.httpPort}`, `tcp:${DEVICE_RUNNER_PORT}`,
     ]);
     // 이전 세대·수동 실행 잔재 정리 — 포트 8300 점유 유령 방지
     await this.deps.runAdb(['-s', serial, 'shell', 'am', 'force-stop', RUNNER_PACKAGE]);
+  }
+
+  private removeForward(session: Session): Promise<unknown> {
+    return this.deps
+      .runAdb(['-s', session.serial, 'forward', '--remove', `tcp:${session.httpPort}`])
+      .catch(() => undefined);
+  }
+
+  /** 기기측 정리(adb) 프로미스 추적 — shutdown 시 awaitTermination이 완료를 기다리게 */
+  private trackCleanup(promise: Promise<unknown>): void {
+    this.cleanups.push(promise);
+    void promise.finally(() => {
+      const index = this.cleanups.indexOf(promise);
+      if (index >= 0) this.cleanups.splice(index, 1);
+    });
   }
 
   private spawnInstrument(session: Session, generation: number): void {
@@ -294,13 +326,14 @@ export class AndroidSupervisor implements ControllerEndpointResolver {
     this.teardownProcesses(session);
     this.sessions.delete(serial);
 
-    // 기기측 러너·포워딩 정리 (기기가 이미 분리됐으면 조용히 실패)
-    void this.deps
-      .runAdb(['-s', serial, 'shell', 'am', 'force-stop', RUNNER_PACKAGE])
-      .catch(() => undefined);
-    void this.deps
-      .runAdb(['-s', serial, 'forward', '--remove', `tcp:${session.httpPort}`])
-      .catch(() => undefined);
+    // 기기측 러너·포워딩 정리 (기기가 이미 분리됐으면 조용히 실패).
+    // shutdown 시 process.exit 전에 완료되도록 프로미스 추적 (fire-and-forget이면 force-stop이 기기에 닿기 전 종료)
+    this.trackCleanup(
+      this.deps
+        .runAdb(['-s', serial, 'shell', 'am', 'force-stop', RUNNER_PACKAGE])
+        .catch(() => undefined),
+    );
+    this.trackCleanup(this.removeForward(session));
 
     // 포트 반납은 쿨다운 후 — 잔존 forward와의 경합 방지 (iOS와 동일 정책)
     const cooldown = setTimeout(() => this.freePorts.push(session.httpPort), this.tuning.portCooldownMs);
