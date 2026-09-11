@@ -1,6 +1,6 @@
 # nebula-clone
 
-토스 디바이스 팜 Nebula 클론 — **iOS 단독**, 실기기 구동이 목표.
+토스 디바이스 팜 Nebula 클론 — **iOS + Android**, 실기기 구동이 목표.
 배경·아키텍처 다이어그램·로드맵은 [README.md](./README.md) 참고. 이 파일은 작업 규칙과 불변식만 담는다.
 
 ## 배포 토폴로지 (설계 불변식)
@@ -8,9 +8,13 @@
 - **오케스트레이션 서버**: 오라클 클라우드 (공인 IP 노출 — 보안 기본값은 항상 닫힘)
 - **Agent**: 집 맥미니, NAT 뒤 → **Agent가 서버로 아웃바운드 WS 터널을 유지** (`/agent`).
   서버→Agent 방향으로 직접 접속하는 코드를 만들지 말 것. 명령·스트림 모두 이 터널 경유
-- **기기**: iPhone 공기계 1대 (USB, Developer Mode 필요). Android는 범위 외
-- **세션리스**: Appium식 세션 없음. 기기별 Controller(XCUITest 러너)는 상시 구동(pre-warm),
-  모든 조작은 stateless HTTP. 세션 생성/관리 개념을 다시 들여오지 말 것
+- **기기**: iPhone 공기계 1대 (USB, Developer Mode 필요) + Android 1대 (ZFold8, USB 디버깅).
+  Android 조작·UI 덤프는 Wi-Fi로도 되지만 미러링 캡처는 USB 필수
+- **세션리스**: Appium식 세션 없음. 기기별 Controller(iOS: XCUITest 러너 / Android: instrumentation 러너)는
+  상시 구동(pre-warm), 모든 조작은 stateless HTTP. 세션 생성/관리 개념을 다시 들여오지 말 것
+- **플랫폼 대칭**: Android 러너가 iOS와 **동일한 Controller HTTP 계약**을 구현 → Agent의 명령 경로
+  (CommandExecutor·ControllerClient)는 플랫폼 무관·무변경. 플랫폼 분기는 발견(DiscoverySource)·
+  러너 기동(수퍼바이저)·미러링(스트림 팩토리)에만 존재
 
 ## 모노레포 구조 (Nx package-based + pnpm workspace)
 
@@ -23,6 +27,8 @@ packages/client   # @nebula/client — SDK: openapi.json 생성 타입 + fetch �
 packages/cli      # @nebula/cli — nebula 커맨드 (client에만 의존, node:util parseArgs)
 controller-ios/   # Swift/XCUITest + XcodeGen — 실기기 검증 완료
 mirror-helper/    # Swift CLI — 원문 H.264 방식, macOS 26 차단으로 보류 (README 참고)
+android-controller/ # Kotlin/Gradle — runner(제어 APK: instrumentation+HTTP) + mirror(app_process dex).
+                    #   Nx 그래프 밖 (scripts/build-android.sh로 빌드). 실기기 검증 완료
 deploy/launchd/   # LaunchAgent 템플릿 — scripts/daemon.sh가 치환·설치 (상시 데몬)
 ```
 
@@ -114,9 +120,8 @@ deploy/launchd/   # LaunchAgent 템플릿 — scripts/daemon.sh가 치환·설�
   키체인 "항상 허용" 1회 후 비대화형 셸에서도 동작 (errSecInternalComponent 예방)
 - **Phase 2.5 완료** (2026-09-07 실기기 검증): `ControllerSupervisor`가 기기별 xcodebuild 러너 +
   iproxy 자동 기동·헬스 폴링·백오프 재기동 (강제 kill → 2초 복구 실측). 준비 기기는
-  `controller-ready` 태그. 모드 선택: `NEBULA_XCODEBUILD_ENABLED=true`(수퍼바이저) vs
-  `NEBULA_CONTROLLER_PORTS`(수동 러너). 기기 없이 개발할 땐 `NEBULA_STATIC_DEVICES`.
-  미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
+  `controller-ready` 태그. 활성화는 `NEBULA_XCODEBUILD_ENABLED=true`. 기기 없이 개발할 땐
+  `NEBULA_STATIC_DEVICES`. 미검증 잔여: 7일 재서명 자동 갱신(시간 경과 필요)
 - **Phase 3 완료 (H.264 미러링, 원문 방식)**: 실측 **40fps/8KB/frame**. 파이프라인:
   mirror-helper(캡처 장치→VideoToolbox H.264) → Agent H264Stream(stdout 패킷 파싱) →
   터널 바이너리 프레임 → StreamsRelay → 브라우저 WebCodecs. **H.264 단독** — Agent가 기기 발견
@@ -136,6 +141,20 @@ deploy/launchd/   # LaunchAgent 템플릿 — scripts/daemon.sh가 치환·설�
 - **러너 이벤트 경로**: 탭·스와이프는 EventSynthesizer(비공개 API) 우선 + XCUI 폴백.
   completion 블록은 `(Bool, NSError?)` — 시그니처 다르면 SIGSEGV (실기기 크래시 리포트로 확정,
   Xcode/iOS 업그레이드 시 재검증 필요)
+- **Phase 5 완료 (Android 지원, 전부 자체 개발)** (2026-09-10 실기기 검증, ZFold8/SM-F971N/Android 17):
+  원문(토스) 방식대로 자체 개발 — 제어는 커스텀 instrumentation APK(ADB+UiAutomation, 의존성 0,
+  자체 HTTP 서버가 iOS와 동일 계약), 미러링은 app_process(shell UID) 데몬(hidden
+  `DisplayManager.createVirtualDisplay` + MediaCodec H.264 → 자체 프로토콜). 발견은
+  플랫폼별 DiscoverySource 합성. **실측**: 탭 왕복 p50 **31.9ms**(원문 59ms·iOS 301ms 대비),
+  ui-dump 31ms, screenshot 62ms, 미러링 50~65fps, 러너 강제 종료 복구 9초.
+  한글 입력 IME 없이 ACTION_SET_TEXT로 동작. 접힘↔펼침 해상도 전환(1248×1972↔2448×1848)은
+  DisplayProbe 폴링이 감지해 세션 자동 재구성. hidden API 지원은 보유 기기 조합만
+  (android-controller/README '지원 기기'). **미검증**: 웹 브라우저 디코더의 펼침 전환 육안 확인,
+  다른 삼성/제조사 빌드에서의 hidden API 존재
+- **Android 튜닝 env** (2026-09-10): 수퍼바이저·미러·러너 타이밍 23개를 `NEBULA_ANDROID_*`로 노출.
+  device-side(미러 데몬·러너)는 Agent가 app_process/`am instrument -e` 인자로 전달 (.env.example 참고)
+- **실기기 연결 참고 (iOS)**: iOS 발견은 `tunnelState`로 실연결 판정 — `pairingState`는 USB 분리 후에도
+  'paired'로 남아 유령 online을 만들어서 (2026-09-10 수정). 연결된 기기의 tunnelState 값은 재연결 시 확인 필요
 - **실기기 연결 참고**: devicectl·usbmuxd·XCUITest는 Wi-Fi로도 동작 (실제로 무선으로 전 파이프라인
   동작 확인됨). 단 미러링 캡처 장치는 USB 필수였음
 - **리뷰 백로그(MEDIUM)**: 서버 heartbeat 미매칭 무시, 두 오프라인 경로 `agent_id` 불일치,

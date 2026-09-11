@@ -1,6 +1,6 @@
 # nebula-clone
 
-토스 디바이스 팜 **Nebula** 따라해보기 — **iOS 단독 버전**
+토스 디바이스 팜 **Nebula** 따라해보기 — **iOS + Android**
 (원문: [토스는 어떻게 수백 대의 기기를 하나의 테스트 인프라로 만들었을까](https://toss.tech/article/device-farm-nebula))
 
 ## 원문 요약 — Nebula가 푸는 문제
@@ -14,9 +14,10 @@
 
 ## 이 클론의 범위
 
-- **iOS만 구현** — Android는 범위 외 (원문과 달리 기기가 iPhone 공기계 1대)
+- **iOS + Android 구현** — iPhone 공기계 1대 + Android 1대(ZFold8). 둘 다 원문(토스) 방식으로
+  자체 개발 (scrcpy·Appium 등 미사용). Android 러너가 iOS와 동일 HTTP 계약이라 Agent 명령 경로 공용
 - **실제 구동이 목표** — 실기기에서 점유 → 조작 → 미러링까지 돌아가는 상태까지 간다
-  (달성 — 전 구간 실기기 검증 완료, 로드맵 참고)
+  (달성 — iOS·Android 전 구간 실기기 검증 완료, 로드맵 참고)
 - **로컬 실행 전용** — 클라우드 배포는 범위에서 제외. 단 설계는 "서버가 공인망, Agent가 NAT 뒤"
   토폴로지를 전제해 아웃바운드 터널 구조를 유지한다
 
@@ -61,8 +62,9 @@ flowchart TB
 
 | 항목 | 원문 (Nebula) | 이 클론 | 이유 |
 |---|---|---|---|
-| 플랫폼 | Android + iOS | **iOS만** | 보유 기기가 iPhone 공기계 1대 |
-| 드라이버 | Appium 대체 자체 개발 (Swift + XCTest) | 동일 — 자체 XCUITest 러너 (WDA 구조 참고) | 이 프로젝트의 학습 핵심 |
+| 플랫폼 | Android + iOS | **iOS + Android** | iPhone 공기계 1대 + ZFold8 |
+| 드라이버 | Appium 대체 자체 개발 | 동일 — iOS: XCUITest 러너 / Android: instrumentation 러너 (둘 다 동일 HTTP 계약) | 이 프로젝트의 학습 핵심 |
+| Android 미러링 | SurfaceControl + MediaCodec | 동일 — app_process(shell UID) 데몬, hidden `createVirtualDisplay` + MediaCodec H.264 (실측 50~65fps) | 원문 방식 자체 구현 |
 | 세션 모델 | 세션리스, 컨트롤러 상시 구동 | 동일 — XCUITest 러너 상시 구동 + stateless HTTP | 세션 오버헤드 제거 구조 체험 |
 | 테스트 큐 | Kafka + Runner 병렬 소비 | 생략 → 동기 REST만 | 규모상 불필요 (YAGNI) |
 | 점유 락 | 분산 락 | SQLite 트랜잭션 원자 점유 (`DevicesRepository` 인터페이스로 저장소 분리) | 서버 1대면 충분 |
@@ -111,17 +113,22 @@ sequenceDiagram
 - **SDK/CLI**: `@nebula/client` — OpenAPI 스펙(`packages/server/openapi.json`)에서
   openapi-typescript로 타입만 생성 + 얇은 fetch 래퍼 (브라우저·Node 공용, 웹 콘솔도 이것을 소비).
   `@nebula/cli` — 그 위에 구축한 `nebula` 커맨드 (의존성 없는 node:util parseArgs)
+- **Android Controller**: **Kotlin** — 제어는 커스텀 instrumentation APK(UiAutomation, 의존성 0,
+  iOS와 동일한 HTTP 계약을 자체 HTTP 서버로 노출), 미러링은 app_process(shell UID) 데몬
+  (hidden `DisplayManager.createVirtualDisplay` + MediaCodec H.264 → 자체 바이너리 프로토콜, 실기기 검증 완료)
 - **레포 구조**: pnpm workspace + Nx 모노레포 (`server` / `agent` / `shared` / `web` / `client` / `cli`) +
-  `controller-ios` (Swift, XcodeGen — workspace 밖)
+  `controller-ios`(Swift/XcodeGen) + `android-controller`(Kotlin/Gradle) — 둘 다 workspace 밖
 
 ## 실행 환경 요구사항
 
 - **맥 1대** — 서버·Agent·웹 콘솔·미러링 헬퍼 실행, Xcode 설치 (XCUITest 러너 빌드·기동에 필수)
 - **iPhone 공기계 1대** — 설정에서 **Developer Mode 활성화** (iOS 16+).
   발견·조작은 Wi-Fi로도 동작하지만 **미러링 캡처 장치는 USB 연결 필수** (실측)
-- **코드 서명** — XCUITest 러너를 기기에 설치하려면 서명 필요.
-  무료 Apple ID는 7일마다 재서명, 유료 개발자 계정($99/년)은 1년 유효
-- Node.js 24+, pnpm
+- **Android 기기 1대 (선택)** — **USB 디버깅** 활성화. 조작·UI 덤프는 Wi-Fi로도 되지만
+  미러링 캡처는 USB 필수. adb + Android SDK(CLI만) 필요 — Android Studio 불필요
+- **코드 서명** — iOS: XCUITest 러너 설치에 서명 필요 (무료 Apple ID는 7일 재서명, 유료 계정은 1년).
+  Android: **디버그 키 자동, 만료 없음** (서명 지옥 없음)
+- Node.js 24+, pnpm. Android 빌드 시 JDK 17+ (자동 선택)
 
 ## 실행 방법
 
@@ -152,7 +159,25 @@ cd controller-ios && xcodegen generate && open NebulaController.xcodeproj
 상태 유지. 미러링은 **USB 연결 필수**이고, macOS 26에서는 최초 1회 QuickTime의 동영상 녹화
 소스 목록을 열어 캡처 장치 발행을 트리거해야 할 수 있다 (mirror-helper/README.md).
 
-이후는 아래 `pnpm dev`만 — 빠진 도구·설정은 스크립트가 검사해서 안내한다.
+#### Android (adb만 있으면 자동 활성)
+
+```bash
+# 도구 — adb + Android SDK (Android Studio 불필요, 전부 CLI)
+brew install --cask android-platform-tools android-commandlinetools
+sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"   # licenses 동의
+cp android-controller/local.properties.example android-controller/local.properties  # sdk.dir 확인
+bash scripts/build-android.sh    # 러너 APK + 미러 dex 빌드 (JDK 17+ 자동 선택, dev.sh도 자동 빌드)
+```
+
+adb가 설치돼 있으면 Android는 **켜는 설정 없이 자동 활성** (발견·제어·미러링). 러너 APK·미러 dex·
+adb 경로는 전부 자동 계산된다 — env 지정 불필요.
+
+기기(Android) 쪽: **개발자 옵션 → USB 디버깅** 활성화, 최초 연결 시 "이 컴퓨터 허용" 다이얼로그
+**허용**, Samsung은 **Auto Blocker OFF**. 조작·UI 덤프는 Wi-Fi로도 되지만 **미러링 캡처는 USB 필수**.
+새 기기는 `bash scripts/android-probe.sh`로 hidden API 지원(U1/U2)을 먼저 확인
+(android-controller/README.md '지원 기기'). **서명 지옥 없음** — 디버그 키 자동, 7일 만료 없음.
+
+이후는 아래 `pnpm dev`만 — 빠진 도구·설정은 스크립트가 검사해서 안내한다 (iOS·Android 모두).
 
 ### 한 번에 실행 (개발 세션)
 
@@ -258,8 +283,14 @@ cd packages/web && pnpm start:dev   # 설정 패널에 서버 주소·클라이�
       (웹 콘솔도 소비) → `nebula` CLI (점유 세션 파일, 종료 코드 규약)
       ③ **프로세스 자동 복구** — launchd LaunchAgent(`scripts/daemon.sh`)로 서버·Agent 상시화
       (자식 프로세스 복구는 Phase 2.5에서 완료). launchd 실설치 검증은 미실시
+- [x] **Phase 5 — Android (전부 자체 개발)**: 실기기 검증 완료 (2026-09-10, ZFold8/Android 17) —
+      제어는 커스텀 instrumentation APK(ADB+UiAutomation, iOS와 동일 HTTP 계약이라 Agent 명령 경로 무변경),
+      미러링은 app_process 데몬(hidden `createVirtualDisplay` + MediaCodec H.264 → 자체 프로토콜).
+      **실측: 탭 p50 31.9ms(원문 59ms·iOS 301ms 대비), 미러링 50~65fps, 한글 입력 IME 없이 동작,
+      접힘↔펼침 해상도 전환 자동 재구성**. hidden API 지원은 보유 기기 조합만
+      (android-controller/README '지원 기기'). 타이밍·튜닝 23개는 `NEBULA_ANDROID_*` env로 조정
 
 ## 원문 대비 의도적 생략
 
-Android 전체, Kafka 파이프라인, 다중 Runner, 무중단 배포, 보안·컴플라이언스 정책, AppCenter 연동,
+Kafka 파이프라인, 다중 Runner, 무중단 배포, 보안·컴플라이언스 정책, AppCenter 연동,
 AI 에이전트 — 학습 범위 밖이거나 규모상 불필요. 구조만 원문을 따르고 구현은 최소로 유지한다.
