@@ -32,9 +32,11 @@ export class HeartbeatMonitor implements OnApplicationBootstrap, OnApplicationSh
 
   sweep(): void {
     try {
-      const staleIds = this.devicesService.expireStaleDevices();
-      if (staleIds.length > 0) {
-        this.logger.warn(`하트비트 만료로 오프라인 처리: ${staleIds.join(', ')}`);
+      const stale = this.devicesService.expireStaleDevices();
+      if (stale.length > 0) {
+        this.logger.warn(
+          `하트비트 만료로 오프라인 처리: ${stale.map((device) => device.deviceId).join(', ')}`,
+        );
       }
     } catch (error) {
       this.logger.error('하트비트 스윕 실패', error as Error);

@@ -8,8 +8,16 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { HEARTBEAT_TIMEOUT_MS, OCCUPATION_TTL_MS, resolveMsEnv } from '../config/constants';
-import { Device, OccupationFailure, OccupyFilter, RegisterDeviceInput } from './device.types';
+import {
+  Device,
+  EndedOccupation,
+  OccupationFailure,
+  OccupyFilter,
+  RegisterDeviceInput,
+  StaleDevice,
+} from './device.types';
 import { DEVICES_REPOSITORY, DevicesRepository } from './devices.repository';
+import { OccupancyEvents } from './occupancy-events.service';
 
 /** 점유 성공 결과 */
 export interface OccupyResult {
@@ -36,6 +44,7 @@ export class DevicesService {
 
   constructor(
     @Inject(DEVICES_REPOSITORY) private readonly repository: DevicesRepository,
+    private readonly occupancyEvents: OccupancyEvents,
     config: ConfigService,
   ) {
     this.occupationTtlMs = resolveMsEnv(
@@ -66,10 +75,11 @@ export class DevicesService {
     return { occupantId, device };
   }
 
-  /** 점유 해제 — occupantId 불일치 시 403 */
+  /** 점유 해제 — occupantId 불일치 시 403. 종료 발행으로 스트림 접근도 함께 회수 */
   release(deviceId: string, occupantId: string): Device {
     const result = this.repository.release(deviceId, occupantId);
     if (result !== 'released') throw OCCUPATION_ERRORS[result]();
+    this.occupancyEvents.publishEnded({ deviceId, occupantId, reason: 'released' });
     return this.getById(deviceId);
   }
 
@@ -84,10 +94,14 @@ export class DevicesService {
     return this.getById(deviceId);
   }
 
-  /** 활동 없는 점유 회수 — 회수된 기기 ID 반환 (기기 status는 유지) */
-  expireIdleOccupations(): string[] {
+  /** 활동 없는 점유 회수 — 회수된 기기·세대 반환 (기기 status는 유지) */
+  expireIdleOccupations(): EndedOccupation[] {
     const cutoffIso = new Date(Date.now() - this.occupationTtlMs).toISOString();
-    return this.repository.expireIdleOccupations(cutoffIso);
+    const ended = this.repository.expireIdleOccupations(cutoffIso);
+    for (const occupation of ended) {
+      this.occupancyEvents.publishEnded({ ...occupation, reason: 'idle_expired' });
+    }
+    return ended;
   }
 
   /** 점유 만료 예정 시각 — 클라이언트가 keepalive 주기를 서버 기준으로 잡게 노출 */
@@ -111,9 +125,18 @@ export class DevicesService {
     this.repository.markAgentOffline(agentId);
   }
 
-  /** 하트비트 만료 기기 오프라인 처리 — 처리된 기기 ID 반환 */
-  expireStaleDevices(): string[] {
+  /** 하트비트 만료 기기 오프라인 처리 — 남아 있던 점유도 회수되므로 종료 발행 */
+  expireStaleDevices(): StaleDevice[] {
     const cutoffIso = new Date(Date.now() - this.heartbeatTimeoutMs).toISOString();
-    return this.repository.markStaleOffline(cutoffIso);
+    const stale = this.repository.markStaleOffline(cutoffIso);
+    for (const device of stale) {
+      if (!device.occupantId) continue;
+      this.occupancyEvents.publishEnded({
+        deviceId: device.deviceId,
+        occupantId: device.occupantId,
+        reason: 'agent_stale',
+      });
+    }
+    return stale;
   }
 }

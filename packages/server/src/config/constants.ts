@@ -48,5 +48,5 @@ export const AGENT_WS_MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 /** 시청자는 수신 전용 — 보내는 메시지가 없어야 정상 */
 export const VIEWER_WS_MAX_PAYLOAD_BYTES = 16 * 1024;
 
-/** 시청자 강제 종료 코드 — 점유 만료 (4403 not occupant와 구분: 권한이 있었다가 끝난 상태) */
-export const VIEWER_CLOSE_OCCUPATION_EXPIRED = 4408;
+/** 시청자 강제 종료 코드 — 점유 종료 (4403 not occupant와 구분: 권한이 있었다가 끝난 상태) */
+export const VIEWER_CLOSE_OCCUPATION_ENDED = 4408;

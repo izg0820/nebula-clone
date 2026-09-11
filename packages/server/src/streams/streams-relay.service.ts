@@ -17,15 +17,19 @@ const VIEWER_TERMINATE_BYTES = 16 * 1024 * 1024;
 @Injectable()
 export class StreamsRelayService {
   private readonly logger = new Logger(StreamsRelayService.name);
-  private readonly viewers = new Map<string, Set<WebSocket>>();
+  /**
+   * 기기별 시청 소켓 → 그 소켓이 연결될 때의 점유 세대(occupantId).
+   * 세대를 같이 들고 있어야 점유가 끝났을 때 "그 세대의 소켓만" 정확히 회수 가능
+   */
+  private readonly viewers = new Map<string, Map<WebSocket, string>>();
 
-  addViewer(deviceId: string, socket: WebSocket): void {
+  addViewer(deviceId: string, occupantId: string, socket: WebSocket): void {
     const existing = this.viewers.get(deviceId);
     if (existing) {
-      existing.add(socket);
+      existing.set(socket, occupantId);
       return;
     }
-    this.viewers.set(deviceId, new Set([socket]));
+    this.viewers.set(deviceId, new Map([[socket, occupantId]]));
   }
 
   removeViewer(deviceId: string, socket: WebSocket): void {
@@ -36,14 +40,20 @@ export class StreamsRelayService {
     this.viewers.delete(deviceId);
   }
 
-  /** 해당 기기 시청자 전원 강제 종료 — 점유 만료 등 인가 상실 시 */
-  closeViewers(deviceId: string, code: number, reason: string): void {
+  /**
+   * 끝난 점유 세대의 시청자 강제 종료 — 해제·유휴 만료·하트비트 회수 공통 경로.
+   * 종료와 동시에 목록에서 제거하므로 이후 broadcast는 그 소켓에 닿지 않음
+   */
+  closeViewers(deviceId: string, occupantId: string, code: number, reason: string): void {
     const sockets = this.viewers.get(deviceId);
     if (!sockets) return;
-    for (const socket of sockets) {
+    for (const [socket, viewerOccupantId] of sockets) {
+      if (viewerOccupantId !== occupantId) continue;
+      sockets.delete(socket);
       if (socket.readyState !== socket.OPEN) continue;
       socket.close(code, reason);
     }
+    if (sockets.size > 0) return;
     // 뒤늦은 removeViewer는 no-op이라 안전
     this.viewers.delete(deviceId);
   }
@@ -61,7 +71,7 @@ export class StreamsRelayService {
       stampMs: frame.stampMs,
       payload: frame.payload,
     });
-    for (const socket of sockets) {
+    for (const socket of sockets.keys()) {
       if (socket.readyState !== socket.OPEN) continue;
       if (socket.bufferedAmount > VIEWER_TERMINATE_BYTES) {
         // half-open 소켓은 readyState가 계속 OPEN — 누적 상한으로 축출 (OOM 방지)

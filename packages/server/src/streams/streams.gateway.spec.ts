@@ -52,7 +52,7 @@ describe('StreamsGateway', () => {
     gateway.handleConnection(socket as unknown as WebSocket, createRequest(VALID_QUERY));
 
     expect(socket.closedWith).toBeNull();
-    expect(relay.addViewer).toHaveBeenCalledWith('udid-1', socket);
+    expect(relay.addViewer).toHaveBeenCalledWith('udid-1', 'occupant-1', socket);
   });
 
   test('토큰 불일치는 4401', () => {

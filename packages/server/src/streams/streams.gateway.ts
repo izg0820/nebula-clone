@@ -68,7 +68,8 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
     client.deviceId = deviceId;
     disableNagle(client);
-    this.relay.addViewer(deviceId, client);
+    // 세대(occupantId)를 함께 등록 — 이 점유가 끝나면 이 소켓만 정확히 회수됨
+    this.relay.addViewer(deviceId, occupantId, client);
   }
 
   handleDisconnect(client: ViewerSocket): void {

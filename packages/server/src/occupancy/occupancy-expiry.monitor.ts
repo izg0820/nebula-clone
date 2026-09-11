@@ -5,17 +5,13 @@ import {
   OnApplicationShutdown,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  resolveMsEnv,
-  SWEEP_INTERVAL_MS,
-  VIEWER_CLOSE_OCCUPATION_EXPIRED,
-} from '../config/constants';
+import { resolveMsEnv, SWEEP_INTERVAL_MS } from '../config/constants';
 import { DevicesService } from '../devices/devices.service';
-import { StreamsRelayService } from '../streams/streams-relay.service';
 
 /**
  * 유휴 점유 회수 — 주기는 NEBULA_SWEEP_INTERVAL_MS (기본 30초).
- * 회수한 기기의 스트림 시청자도 함께 종료
+ * 회수한 기기의 스트림 시청자 종료는 StreamRevocationListener가 담당
+ * (해제·유휴 만료·하트비트 회수가 같은 점유 종료 이벤트로 수렴)
  */
 @Injectable()
 export class OccupancyExpiryMonitor implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -25,7 +21,6 @@ export class OccupancyExpiryMonitor implements OnApplicationBootstrap, OnApplica
 
   constructor(
     private readonly devicesService: DevicesService,
-    private readonly relay: StreamsRelayService,
     config: ConfigService,
   ) {
     this.intervalMs = resolveMsEnv(config.get<string>('NEBULA_SWEEP_INTERVAL_MS'), SWEEP_INTERVAL_MS);
@@ -41,12 +36,9 @@ export class OccupancyExpiryMonitor implements OnApplicationBootstrap, OnApplica
 
   sweep(): void {
     try {
-      const expiredIds = this.devicesService.expireIdleOccupations();
-      if (expiredIds.length === 0) return;
-      this.logger.warn(`점유 만료로 회수: ${expiredIds.join(', ')}`);
-      for (const deviceId of expiredIds) {
-        this.relay.closeViewers(deviceId, VIEWER_CLOSE_OCCUPATION_EXPIRED, 'occupation expired');
-      }
+      const expired = this.devicesService.expireIdleOccupations();
+      if (expired.length === 0) return;
+      this.logger.warn(`점유 만료로 회수: ${expired.map((item) => item.deviceId).join(', ')}`);
     } catch (error) {
       this.logger.error('점유 만료 스윕 실패', error as Error);
     }

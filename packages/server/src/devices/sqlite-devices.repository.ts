@@ -5,10 +5,12 @@ import {
   Device,
   DevicePlatform,
   DeviceStatus,
+  EndedOccupation,
   OccupyFilter,
   RegisterDeviceInput,
   ReleaseResult,
   RenewResult,
+  StaleDevice,
 } from './device.types';
 import { DevicesRepository } from './devices.repository';
 
@@ -166,25 +168,25 @@ export class SqliteDevicesRepository implements DevicesRepository {
     return renewTx();
   }
 
-  expireIdleOccupations(cutoffIso: string): string[] {
-    const expireTx = this.db.transaction((): string[] => {
+  expireIdleOccupations(cutoffIso: string): EndedOccupation[] {
+    const expireTx = this.db.transaction((): EndedOccupation[] => {
       // last_activity_at IS NULL인 점유는 알 수 없는 상태 — 잠김이 아니라 회수 쪽으로 기움
       const rows = this.db
         .prepare(
-          `SELECT id FROM devices
+          `SELECT id, occupant_id FROM devices
            WHERE occupant_id IS NOT NULL
              AND (last_activity_at IS NULL OR last_activity_at < ?)`,
         )
-        .all(cutoffIso) as Array<{ id: string }>;
+        .all(cutoffIso) as Array<{ id: string; occupant_id: string }>;
       if (rows.length === 0) return [];
 
-      const ids = rows.map((row) => row.id);
+      const ended = rows.map((row) => ({ deviceId: row.id, occupantId: row.occupant_id }));
       const reclaim = this.db.prepare(
         // status·agent_id는 유지 — 유휴 만료는 사람 이탈이지 기기 소실이 아님 (즉시 재점유 가능)
         'UPDATE devices SET occupant_id = NULL, occupied_at = NULL, last_activity_at = NULL WHERE id = ?',
       );
-      for (const id of ids) reclaim.run(id);
-      return ids;
+      for (const occupation of ended) reclaim.run(occupation.deviceId);
+      return ended;
     });
     return expireTx();
   }
@@ -211,27 +213,27 @@ export class SqliteDevicesRepository implements DevicesRepository {
       .run(agentId);
   }
 
-  markStaleOffline(cutoffIso: string): string[] {
-    const stale = this.db.transaction((): string[] => {
+  markStaleOffline(cutoffIso: string): StaleDevice[] {
+    const stale = this.db.transaction((): StaleDevice[] => {
       // offline이지만 점유가 남은 기기도 포함 — markAgentOffline이 점유를 유지하므로
       // 여기서 회수하지 않으면 Agent 미복귀 시 영구 점유가 됨
       const rows = this.db
         .prepare(
-          `SELECT id FROM devices
+          `SELECT id, occupant_id FROM devices
            WHERE (status = 'online' OR occupant_id IS NOT NULL)
              AND (last_heartbeat_at IS NULL OR last_heartbeat_at < ?)`,
         )
-        .all(cutoffIso) as Array<{ id: string }>;
+        .all(cutoffIso) as Array<{ id: string; occupant_id: string | null }>;
       if (rows.length === 0) return [];
 
-      const ids = rows.map((row) => row.id);
+      const devices = rows.map((row) => ({ deviceId: row.id, occupantId: row.occupant_id }));
       const markOffline = this.db.prepare(
         `UPDATE devices
          SET status = 'offline', occupant_id = NULL, occupied_at = NULL, last_activity_at = NULL
          WHERE id = ?`,
       );
-      for (const id of ids) markOffline.run(id);
-      return ids;
+      for (const device of devices) markOffline.run(device.deviceId);
+      return devices;
     });
     return stale();
   }

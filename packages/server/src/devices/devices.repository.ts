@@ -1,9 +1,11 @@
 import {
   Device,
+  EndedOccupation,
   OccupyFilter,
   RegisterDeviceInput,
   ReleaseResult,
   RenewResult,
+  StaleDevice,
 } from './device.types';
 
 /** DI 토큰 */
@@ -38,9 +40,9 @@ export interface DevicesRepository {
 
   /**
    * 활동이 cutoff 이전인 점유 회수 — 기기 status는 유지 (즉시 재점유 가능)
-   * @return 회수된 기기 ID 목록
+   * @return 회수된 기기·세대 목록
    */
-  expireIdleOccupations(cutoffIso: string): string[];
+  expireIdleOccupations(cutoffIso: string): EndedOccupation[];
 
   /** 하트비트 시각 갱신 */
   heartbeat(deviceIds: readonly string[], agentId: string, nowIso: string): void;
@@ -49,8 +51,8 @@ export interface DevicesRepository {
   markAgentOffline(agentId: string): void;
 
   /**
-   * 하트비트가 cutoff 이전인 기기 오프라인 처리
-   * @return 오프라인 처리된 기기 ID 목록
+   * 하트비트가 cutoff 이전인 기기 오프라인 처리 (점유도 함께 회수)
+   * @return 오프라인 처리된 기기 목록 (회수된 점유 세대 포함)
    */
-  markStaleOffline(cutoffIso: string): string[];
+  markStaleOffline(cutoffIso: string): StaleDevice[];
 }

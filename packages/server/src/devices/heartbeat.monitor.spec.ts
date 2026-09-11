@@ -8,7 +8,9 @@ function createConfig(env: Record<string, string> = {}): ConfigService {
 
 describe('HeartbeatMonitor', () => {
   test('sweep은 만료 처리를 서비스에 위임', () => {
-    const expireStaleDevices = jest.fn().mockReturnValue(['udid-1']);
+    const expireStaleDevices = jest
+      .fn()
+      .mockReturnValue([{ deviceId: 'udid-1', occupantId: null }]);
     const service = { expireStaleDevices } as unknown as DevicesService;
     const monitor = new HeartbeatMonitor(service, createConfig());
 

@@ -122,9 +122,9 @@ describe('SqliteDevicesRepository', () => {
     repository.upsertMany([iphone], AGENT_ID, NOW);
     const CUTOFF_AFTER_NOW = '2026-09-04T00:02:00.000Z';
 
-    const staleIds = repository.markStaleOffline(CUTOFF_AFTER_NOW);
+    const stale = repository.markStaleOffline(CUTOFF_AFTER_NOW);
 
-    expect(staleIds).toEqual([iphone.id]);
+    expect(stale).toEqual([{ deviceId: iphone.id, occupantId: null }]);
     expect(repository.findById(iphone.id)?.status).toBe('offline');
   });
 
@@ -158,9 +158,10 @@ describe('SqliteDevicesRepository', () => {
     repository.markAgentOffline(AGENT_ID);
     const CUTOFF_AFTER_NOW = '2026-09-04T00:02:00.000Z';
 
-    const staleIds = repository.markStaleOffline(CUTOFF_AFTER_NOW);
+    const stale = repository.markStaleOffline(CUTOFF_AFTER_NOW);
 
-    expect(staleIds).toEqual([iphone.id]);
+    // 회수된 세대를 함께 반환 — 스트림 접근 회수가 이 세대를 기준으로 소켓을 끊음
+    expect(stale).toEqual([{ deviceId: iphone.id, occupantId: 'occupant-1' }]);
     expect(repository.findById(iphone.id)?.occupantId).toBeNull();
   });
 
@@ -214,9 +215,9 @@ describe('SqliteDevicesRepository', () => {
     repository.tryOccupy({}, 'occupant-1', NOW);
     const CUTOFF_AFTER_NOW = '2026-09-04T00:11:00.000Z';
 
-    const expiredIds = repository.expireIdleOccupations(CUTOFF_AFTER_NOW);
+    const expired = repository.expireIdleOccupations(CUTOFF_AFTER_NOW);
 
-    expect(expiredIds).toEqual([iphone.id]);
+    expect(expired).toEqual([{ deviceId: iphone.id, occupantId: 'occupant-1' }]);
     const device = repository.findById(iphone.id);
     expect(device?.occupantId).toBeNull();
     expect(device?.occupiedAt).toBeNull();
@@ -243,7 +244,9 @@ describe('SqliteDevicesRepository', () => {
       .prepare('UPDATE devices SET last_activity_at = NULL WHERE id = ?')
       .run(iphone.id);
 
-    expect(repository.expireIdleOccupations('2026-09-03T00:00:00.000Z')).toEqual([iphone.id]);
+    expect(repository.expireIdleOccupations('2026-09-03T00:00:00.000Z')).toEqual([
+      { deviceId: iphone.id, occupantId: 'occupant-1' },
+    ]);
   });
 
   test('만료 회수 직후 같은 기기를 즉시 재점유 가능', () => {

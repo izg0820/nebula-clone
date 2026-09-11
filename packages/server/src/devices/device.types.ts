@@ -51,3 +51,15 @@ export type ReleaseResult = 'released' | OccupationFailure;
 
 /** 점유 활동 연장 결과 */
 export type RenewResult = 'renewed' | OccupationFailure;
+
+/** 종료된 점유 — 회수 경로가 어느 세대를 끝냈는지 함께 반환 (스트림 접근 회수 기준) */
+export interface EndedOccupation {
+  readonly deviceId: string;
+  readonly occupantId: string;
+}
+
+/** 오프라인 처리된 기기 — 점유가 남아 있었다면 회수된 세대도 함께 반환 */
+export interface StaleDevice {
+  readonly deviceId: string;
+  readonly occupantId: string | null;
+}
