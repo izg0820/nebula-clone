@@ -37,8 +37,8 @@ if [ "$mode" = "--fake" ]; then
   blue "가짜 기기 모드 — 수퍼바이저·미러링·Android 비활성"
   export NEBULA_STATIC_DEVICES='[{"id":"fake-1","name":"Fake iPhone","osVersion":"26.0","tags":["fake"]}]'
   export NEBULA_XCODEBUILD_ENABLED=''
-  export NEBULA_MIRROR_HELPER=''
-  export NEBULA_ADB_ENABLED=''
+  # adb 경로를 없는 값으로 막아 Android 자동 활성 차단 (config가 adb 없음 → Android 비활성)
+  export NEBULA_ADB_PATH='/nonexistent/adb'
 else
   # 수퍼바이저(기본 on) 도구 사전 검사 — 없으면 기동 후 재기동 루프만 돌고 원인이 로그에 묻힘.
   # .env에 NEBULA_XCODEBUILD_ENABLED=false를 명시한 수동 러너 모드는 검사 생략
@@ -51,34 +51,24 @@ else
   agent_env_default NEBULA_XCODEBUILD_ENABLED true
   agent_env_default NEBULA_CONTROLLER_PROJECT "$repo_root/controller-ios/NebulaController.xcodeproj"
 
-  # Android — .env에 NEBULA_ADB_ENABLED=true를 명시했을 때만 검사·기본값 주입
-  if grep -q '^NEBULA_ADB_ENABLED=true' "$repo_root/packages/agent/.env"; then
-    command -v adb >/dev/null || fail "adb 필요 — brew install --cask android-platform-tools"
+  # Android — adb가 설치돼 있으면 자동 활성 (config가 산출물 경로 기본값 계산). 산출물만 빌드
+  if command -v adb >/dev/null; then
     android_runner_apk="$repo_root/android-controller/runner/build/outputs/apk/debug/runner-debug.apk"
-    if [ ! -f "$android_runner_apk" ]; then
-      blue "Android 러너 APK 빌드 중..."
-      bash "$repo_root/scripts/build-android.sh" >/dev/null 2>&1 \
-        || blue "Android 러너 빌드 실패 — Android는 발견만 동작 (scripts/build-android.sh로 확인)"
-    fi
-    if [ -f "$android_runner_apk" ]; then
-      agent_env_default NEBULA_ANDROID_RUNNER_APK "$android_runner_apk"
-    fi
     android_mirror_dex="$repo_root/android-controller/mirror/build/outputs/apk/debug/mirror-debug.apk"
-    if [ -f "$android_mirror_dex" ]; then
-      agent_env_default NEBULA_ANDROID_MIRROR_DEX "$android_mirror_dex"
+    if [ ! -f "$android_runner_apk" ] || [ ! -f "$android_mirror_dex" ]; then
+      blue "Android 산출물 빌드 중..."
+      bash "$repo_root/scripts/build-android.sh" >/dev/null 2>&1 \
+        || blue "Android 빌드 실패 — scripts/build-android.sh로 확인 (조작·미러링 재시도 루프)"
     fi
+  else
+    blue "adb 미설치 — Android 비활성 (brew install --cask android-platform-tools)"
   fi
 
-  # mirror-helper — 없으면 빌드 시도, 실패해도 미러링만 빠진 채 진행
+  # mirror-helper(iOS 미러링) — 없으면 빌드 시도 (config가 경로 기본값 계산)
   helper_bin="$repo_root/mirror-helper/.build/debug/mirror-helper"
   if [ ! -x "$helper_bin" ] && command -v swift >/dev/null; then
     blue "mirror-helper 빌드 중..."
-    (cd "$repo_root/mirror-helper" && swift build) || blue "mirror-helper 빌드 실패 — 미러링 없이 진행"
-  fi
-  if [ -x "$helper_bin" ]; then
-    agent_env_default NEBULA_MIRROR_HELPER "$helper_bin"
-  else
-    blue "mirror-helper 미설치 — 미러링 비활성 (조작·UI 덤프는 동작)"
+    (cd "$repo_root/mirror-helper" && swift build) || blue "mirror-helper 빌드 실패 — iOS 미러링 재시도 루프"
   fi
 
   # xcodeproj — 없으면 xcodegen으로 생성 (local.yml에 Team ID 필요)
@@ -189,6 +179,20 @@ require_port_free 5173
 blue "빌드 중 (shared·server·agent·web)..."
 (cd "$repo_root" && pnpm -s build >/dev/null) || fail "빌드 실패 — pnpm build로 확인"
 
+# @nebula/client·shared에 신규 런타임 export가 생기면 Vite 사전번들 캐시가 stale이 돼
+# 브라우저에서 "X is not a function"으로 터진다 (타입은 통과 → tsc로 안 잡힘). 빌드 산출물이
+# 캐시보다 새로우면 무효화 — vite가 재사전번들
+vite_cache="$repo_root/packages/web/node_modules/.vite"
+for pkg in client shared; do
+  dist_js="$repo_root/packages/$pkg/dist/index.js"
+  cache_js="$vite_cache/deps/@nebula_$pkg.js"
+  if [ -f "$dist_js" ] && [ -d "$vite_cache" ] && [ "$dist_js" -nt "$cache_js" ]; then
+    blue "@nebula/$pkg 변경 감지 — Vite 사전번들 캐시 무효화"
+    rm -rf "$vite_cache"
+    break
+  fi
+done
+
 pids=()
 
 cleanup() {
@@ -232,8 +236,10 @@ blue "Agent 기동..."
 pids+=($!)
 
 # ── 웹 콘솔 ───────────────────────────────────────────
-blue "웹 콘솔 기동 (:5173)..."
-(cd "$repo_root/packages/web" && exec npx vite --port 5173 --strictPort) > "$logs_dir/web.log" 2>&1 &
+# 웹 기본 서버 URL을 실제 서버 포트로 주입 — 다른 앱이 3000을 쓰는 환경(PORT=3999 등)에서
+# 웹이 엉뚱한 서버로 붙어 404가 나는 것 방지 (설정 패널에서 바꾸면 그 값이 우선)
+blue "웹 콘솔 기동 (:5173, 서버 http://localhost:$server_port)..."
+(cd "$repo_root/packages/web" && VITE_SERVER_URL="http://localhost:$server_port" exec npx vite --port 5173 --strictPort) > "$logs_dir/web.log" 2>&1 &
 pids+=($!)
 
 client_token="$(grep '^NEBULA_CLIENT_TOKEN=' "$repo_root/packages/server/.env" | cut -d= -f2)"
